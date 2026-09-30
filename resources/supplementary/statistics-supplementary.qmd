@@ -1,0 +1,69 @@
+---
+title: "Untitled"
+format: html
+---
+
+## Statistical Analyses - Supplementary
+
+General approach. All analyses were performed in R (version 4.5.1). All outcomes except RNA sequencing were analysed with Bayesian multilevel regression models fitted with brms [@brms], an interface to the probabilistic programming language Stan [@stan]. Posterior draws were post-processed with marginaleffects (version 0.32.0) [@marginaleffects] to obtain model-based predictions and contrasts. Priors were weakly informative and specified on standardized outcome scales. For every model, priors were evaluated by prior predictive simulation (sampling from the prior only) before the model was fitted to data. Models were sampled with four chains. Convergence was accepted when all R-hat values were below 1.01 and the effective sample size exceeded 400 for all parameters. Model fit was assessed with posterior predictive checks.
+
+The study used a unilateral within-participant design. In the intervention groups, low- and moderate-volume training were randomly allocated to the two legs (or arms) of each participant. To encode this, allocation (intervention or control), age group (young or old), volume condition (low, moderate or control) and sex were combined into a single ten-level group factor. This let each combination have its own baseline and change over time. It also meant that group means could later be averaged across sexes with equal weight, so that results are not driven by differences in sex distribution between groups.
+
+Muscle volume, muscle thickness, upper-body lean mass, 1RM leg press, bicep curl MVC, UBF and c-Myc. Outcomes were log-transformed and standardized (mean 0, SD 1 on the log scale). They were modelled with a Normal likelihood as
+
+y ~ 0 + group + group:time + (1 + time | participant) + (1 | participant:limb),
+
+where limb denotes the leg or arm. This gives each group a separate baseline and a separate change at each follow-up time point. The participant-level varying intercept and time slope account for repeated measurements and for individual differences in response. The participant-by-limb varying intercept accounts for the two limbs of each participant contributing separate observations.
+
+Two outcomes had additional repeated tests. For 1RM leg press, two tests were performed at both the half-way and post time points, and a participant-by-leg-by-time intercept was added to separate test-to-test variation from change over time. For bicep curl MVC, all three contractions from each test were retained, and a participant-by-arm-by-test-occasion intercept was added.
+
+Fixed effects had Normal(0, 1) priors, standard deviations and the residual SD had Exponential(1) priors, and correlations had an LKJ(2) prior. Models were sampled for 4,000 iterations per chain, with half used as warm-up, adapt_delta = 0.95 and a maximum tree depth of 15. Upper-body lean mass was sampled for 6,000 iterations. For UBF and c-Myc, sampling was increased to 10,000 iterations with adapt_delta = 0.99 because of divergent transitions and low effective sample sizes at the default settings. The two c-Myc bands (~49 and ~60 kDa) were analysed as separate outcomes.
+
+Peak torque. Isokinetic and isometric peak torque was averaged across repetitions within each testing session. It was normalized to the maximum observed value and modelled on this additive scale. Torque was modelled as a quadratic function of normalized angular velocity (speed/240, where 0°/s is isometric). The population-level curve was allowed to differ between intervention and control at each time point, with a sex-centred adjustment to each curve term. Varying intercepts, linear slopes and quadratic slopes were included for group-by-time (the ten-level group factor), for participant, and for participant-by-time. A varying intercept for testing session (two sessions per participant and time point) was also included. Priors reflected the expected shape of the force–velocity relationship:
+
+Intercepts: Normal(0.5, 0.25)
+Linear terms: Normal(−0.5, 0.1)
+Quadratic terms: Normal(0.25, 0.2)
+Sex terms: Normal(0, 0.25)
+Standard deviations: Exponential(10)
+Correlations: LKJ(2)
+Residual SD: Exponential(1)
+
+Four chains of 3,000 iterations (1,000 warm-up) were run with adapt_delta = 0.95. Predictions were made at the four tested velocities. Within-group change was computed per draw as the ratio of post (or half-way) to baseline predictions. Between-group contrasts were computed as ratios of these ratios, and pooling across volume conditions used the geometric mean of the two limbs.
+
+Total RNA. Total RNA was measured in four technical replicates per sample. Log-transformed, standardized RNA content was modelled at the replicate level. Log-transformed, standardized tissue weight was included as a covariate, so that the RNA–tissue relationship was estimated from the data rather than assumed to be proportional. The model included group, time (baseline, week 3, post) and their interaction as fixed effects. Varying effects were included for participant (intercept and time), leg within participant, and sample within participant, the last separating technical from biological variation. Priors were Normal(0, 1) for fixed effects, Normal(1, 1) for the tissue-weight slope, Exponential(1) for standard deviations and the residual SD, and LKJ(2) for correlations. The model was sampled for 4,000 iterations with adapt_delta = 0.95. Predictions were made at the mean tissue weight.
+
+Oral glucose tolerance test. Standardized glucose was modelled as a function of sampling time using B-splines with four degrees of freedom. Separate intercepts and spline coefficients were estimated for each combination of time point (pre, post) and group (young intervention, old intervention, old control). Participant-level varying intercepts and spline coefficients allowed each participant their own curve, with information shared across participants. Actual sampling times were used, with scheduled times substituted where missing. Priors encoded an initial rise followed by a decline:
+
+Group intercepts: Normal(−1, 1.5)
+Spline coefficients 1–4: Normal(1, 1.5), Normal(0.5, 1.5), Normal(−1, 1.5) and Normal(−0.5, 1.5)
+Standard deviations: Exponential(2)
+Correlations: LKJ(1)
+Residual SD: Exponential(1)
+
+The model was sampled for 4,000 iterations (1,000 warm-up) with adapt_delta = 0.95. Predicted curves were back-transformed to mmol/L. Pre-to-post changes were compared between groups at 2-min intervals from 0 to 120 min. The time windows in which the 95% CI of a difference excluded zero were reported, together with the magnitude at the point of largest divergence.
+
+Contrasts and reporting. For all outcomes except OGTT and RNA sequencing, group-by-time predictions were obtained from population-level effects only. For each group, change from baseline was averaged across sexes with equal weight. From these, the following contrasts were computed:
+
+Within-group change from baseline
+Intervention-group change pooled across volume conditions within each age group
+Young vs. old (pooled across volume)
+Old intervention vs. control
+Moderate vs. low volume within each age group
+The difference in volume effect between age groups (volume × age)
+
+Contrasts were computed on 4,000 posterior draws. For log-scale outcomes, draws were back-transformed as exp(draw × SD), where SD is the standard deviation of the log-transformed outcome. Within-group changes therefore represent fold-changes, and between-group contrasts represent ratios of fold-changes. Both are reported as percentages, (ratio − 1) × 100. OGTT differences are reported in mmol/L.
+
+Estimates are summarized as the posterior mean with a 95% equal-tailed credible interval (CI). The posterior probability of an effect in the direction of the point estimate is reported as P(>0) or P(<0). Effects were termed credible when the 95% CI excluded zero (P ≥ 97.5%). Otherwise, P ≥ 90% was described as likely, 75% ≤ P < 90% as weak evidence, and P < 75% as no evidence.
+
+RNA sequencing. Low-abundance genes were removed with edgeR::filterByExpr (minimum count 10, minimum total count 15, large n 10, minimum proportion 0.7, grouped by sex and age). Library sizes were normalized with the trimmed mean of M-values method [@robinson2010; @edger]. Gene counts were modelled with negative binomial (NB2) generalized linear mixed models in glmmTMB [@glmmmtb]. Fixed effects were sex, age group, a combined time-condition factor (baseline, post low volume, post moderate volume) and the age × time-condition interaction. Each model had a participant-level varying intercept and the log effective library size (relative to the median) as an offset.
+
+Estimates were regularized by empirical Bayes shrinkage in two passes using seqwrap [@seqwrap; @efron2010]. First, unregularized models were fitted to all 16,878 genes. Priors for the second pass were then built from these estimates:
+
+Fixed effects (except the intercept): Normal distributions with the across-gene mean and SD of each parameter
+The participant SD: a Gamma prior (shape from the across-gene mean, scale 2)
+Dispersion: a gene-specific Normal prior, centred on a loess trend (span 0.7) of dispersion against mean log count, with the trend's residual standard error as its SD
+
+Contrasts were computed on the link scale at the median library size and averaged over sex and volume condition. P-values were adjusted with the Benjamini–Hochberg procedure within each contrast, and genes with FDR < 5% were considered differentially expressed. Rank-based gene-set enrichment analysis of GO Biological Process terms was performed with clusterProfiler (gseGO) [@xu2024a], ranking genes by the contrast Wald statistic. Settings were gene-set size 25–500, 10,000 permutations and adjusted p < 0.01, and redundant terms were simplified at a similarity cutoff of 0.5.
+
+

@@ -1,0 +1,452 @@
+---
+title: "Age Variability Analysis"
+format: html
+editor_options: 
+  chunk_output_type: console
+---
+
+
+```{r, setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+
+```
+
+
+## Relief age variability analysis
+
+This document is created to test the hypothesis that there is a larger variation among older individuals compared to young, both in terms of baseline measurese, but also the change from baseline to post. At first, this will look at parameters within muscle hypertrophy (muscle volume, thickness, lean mass) and strength (isometric MVC, isokinetic peak torque, 1RM leg press, bicep curl MVC).
+
+
+### Data import and check
+
+```{r, package & data}
+
+#--- Packages ------------------------------------------------------------------
+
+library(tidyverse); library(ggrepel); library(patchwork); library(ggbeeswarm); 
+library(lawstat)
+
+
+#--- Data import ---------------------------------------------------------------
+
+mv_dat <- readRDS("./data/data-gen/muscle_volume.RDS") %>%
+  filter(!allocation == "con") 
+
+mt_dat <- readRDS("./data/data-gen/muscle_thickness.rds") %>%
+  filter(!allocation == "con") %>%
+  rename(age_group = age_grp)
+  
+ublm_dat <- readRDS("./data/data-gen/lean_dat.rds") %>%
+  filter(!allocation == "con")
+
+isom_dat <- readRDS("./data/data-gen/iso_isom.rds") %>%
+  filter(!allocation == "con") %>%
+  rename(age_group = age_grp)
+
+isok_dat <- readRDS("./data/data-gen/iso_isok.rds") %>%
+  filter(!allocation == "con") %>%
+  rename(age_group = age_grp)
+
+keiser_dat <- readRDS("./data/data-gen/keiser_dat.rds") %>%
+  filter(!allocation == "con") %>%
+  rename(age_group = age_grp)
+
+bc_dat <- readRDS("./data/data-gen/bc_dat.rds") %>%
+  filter(!allocation == "con") %>%
+  rename(age_group = age_grp)
+
+
+```
+
+
+### Creating helper functions and setting up data format
+
+To visualise the variation between young and old, we will be using a dot plot of raw individual values, one panel for baseline and one for change. The raw dots displays the individuals well, and we'll use CV/SD overaly for the dispersion. The following helper functions and data formatting is done to ease this process. 
+
+```{r, helper functions}
+
+#--- Helpers -------------------------------------------------------------------
+
+cv <- function(x) {
+  m <- mean(x, na.rm = TRUE)
+  s <- sd(x, na.rm = TRUE)
+  if (abs(m) < 1e-6) return(NA_real_)   # guard against near-zero mean
+  (s / abs(m)) * 100
+}
+ 
+# Brown-Forsythe test (location = median)
+bf_p <- function(vals, grp) {
+  df <- data.frame(v = vals, g = grp) |> drop_na()
+  if (length(unique(df$g)) < 2 || nrow(df) < 4) return(NA_real_)
+  tryCatch(
+    lawstat::levene.test(df$v, df$g, location = "median")$p.value,
+    error = function(e) NA_real_
+  )
+}
+ 
+fmt_p <- function(p) {
+  case_when(
+    is.na(p)  ~ "",
+    p < .001  ~ "p < .001",
+    p < .01   ~ sprintf("p = %.3f", p),
+    TRUE      ~ sprintf("p = %.2f", p)
+  )
+}
+ 
+# Colour palette consistent with fig1.qmd
+col_yng <- "#2166ac"
+col_old <- "#d6604d"
+
+
+```
+
+
+```{r, data formatting}
+
+#--- Hypertrophy data ----------------------------------------------------------
+
+# Muscle volume (MRI, pre/post)
+mv <- mv_dat %>%          
+  filter(time %in% c("pre", "post")) %>%
+  select(participant, age_group, time, value = volume) %>%
+  summarise(value = mean(value, na.rm = TRUE),
+            .by = c(participant, age_group, time)) %>% 
+  mutate(outcome = "Muscle volume\n(cm³)")
+ 
+# Muscle thickness (ultrasound, pre/post)
+mt <- mt_dat %>%
+  filter(time %in% c("pre", "post")) %>%
+  group_by(participant, age_group, time) %>%
+  summarise(value = mean(thickness, na.rm = TRUE), .groups = "drop") %>%
+  summarise(value = mean(value, na.rm = TRUE),
+            .by = c(participant, age_group, time)) %>% 
+  mutate(outcome = "Muscle thickness\n(mm)")
+ 
+# Upper-body lean mass (DXA, pre/post)
+ublm <- ublm_dat %>%
+  filter(time %in% c("pre", "post")) %>%
+  select(participant, age_group, time, value = kg) %>%
+  summarise(value = mean(value, na.rm = TRUE),
+            .by = c(participant, age_group, time)) %>% 
+  mutate(outcome = "Upper-body lean mass\n(kg)")
+
+
+#--- Hypertrophy data ----------------------------------------------------------
+
+# Assumes strength data has cols: participant, age_grp, time, value
+# and that you've already computed mean across speeds/reps per session
+
+# Isometric MVC (humac, pre/post)
+isom <- isom_dat %>%
+  filter(time %in% c("pre", "post")) %>%
+  group_by(participant, age_group, time) %>%
+  summarise(value = mean(pt, na.rm = TRUE), .groups = "drop") %>%
+  summarise(value = mean(value, na.rm = TRUE),
+            .by = c(participant, age_group, time)) %>% 
+  mutate(outcome = "Isometric MVC\n(Nm)")
+ 
+isok60 <- isok_dat %>%
+  filter(speed == "60", time %in% c("pre", "post")) %>%
+  group_by(participant, age_group, time) %>%
+  summarise(value = mean(pt, na.rm = TRUE), .groups = "drop") %>%
+  summarise(value = mean(value, na.rm = TRUE),
+            .by = c(participant, age_group, time)) %>% 
+  mutate(outcome = "Isokinetic 60°/s\n(Nm)")
+ 
+isok120 <- isok_dat %>%
+  filter(speed == "120", time %in% c("pre", "post")) %>%
+  group_by(participant, age_group, time) %>%
+  summarise(value = mean(pt, na.rm = TRUE), .groups = "drop") %>%
+  summarise(value = mean(value, na.rm = TRUE),
+            .by = c(participant, age_group, time)) %>% 
+  mutate(outcome = "Isokinetic 120°/s\n(Nm)")
+ 
+isok240 <- isok_dat %>%
+  filter(speed == "240", time %in% c("pre", "post")) %>%
+  group_by(participant, age_group, time) %>%
+  summarise(value = mean(pt, na.rm = TRUE), .groups = "drop") %>%
+  summarise(value = mean(value, na.rm = TRUE),
+            .by = c(participant, age_group, time)) %>% 
+  mutate(outcome = "Isokinetic 240°/s\n(Nm)")
+ 
+keiser <- keiser_dat %>%
+  filter(time %in% c("pre", "post")) %>%
+  group_by(participant, age_group, time) %>%
+  summarise(value = mean(maxrm, na.rm = TRUE), .groups = "drop") %>%
+  summarise(value = mean(value, na.rm = TRUE),
+            .by = c(participant, age_group, time)) %>% 
+  mutate(outcome = "Leg press 1RM\n(kg)")
+ 
+bc <- bc_dat %>%
+  filter(time %in% c("pre", "post")) %>%
+  mutate(mvc = if_else(participant == "3021" & arm == "R" & time == "pre",
+                       NA_real_, mvc)) %>%
+  group_by(participant, age_group, time) %>%
+  summarise(value = mean(mvc, na.rm = TRUE), .groups = "drop") %>%
+  summarise(value = mean(value, na.rm = TRUE),
+            .by = c(participant, age_group, time)) %>% 
+  mutate(outcome = "Bicep curl MVC\n(Nm)")
+
+#--- Bind all together ---------------------------------------------------------
+
+dat_long <- bind_rows(mv, mt, ublm, isom, isok60, isok120, isok240, keiser, bc)
+ 
+# Outcome order for facets
+outcome_order <- c(
+  "Muscle volume\n(cm³)", "Muscle thickness\n(mm)", "Upper-body lean mass\n(kg)",
+  "Isometric MVC\n(Nm)", "Isokinetic 60°/s\n(Nm)", "Isokinetic 120°/s\n(Nm)",
+  "Isokinetic 240°/s\n(Nm)", "Leg press 1RM\n(kg)", "Bicep curl MVC\n(Nm)"
+)
+ 
+domain_map <- c(
+  "Muscle volume\n(cm³)"       = "Hypertrophy",
+  "Muscle thickness\n(mm)"     = "Hypertrophy",
+  "Upper-body lean mass\n(kg)" = "Hypertrophy",
+  "Isometric MVC\n(Nm)"        = "Strength",
+  "Isokinetic 60°/s\n(Nm)"     = "Strength",
+  "Isokinetic 120°/s\n(Nm)"    = "Strength",
+  "Isokinetic 240°/s\n(Nm)"    = "Strength",
+  "Leg press 1RM\n(kg)"        = "Strength",
+  "Bicep curl MVC\n(Nm)"       = "Strength"
+)
+ 
+dat_long <- dat_long %>%
+  mutate(
+    outcome = factor(outcome, levels = outcome_order),
+    domain  = domain_map[as.character(outcome)],
+    age_grp = factor(age_group, levels = c("yng", "old"),
+                     labels = c("Young", "Older"))
+  )
+
+
+```
+
+### Calculating values for the figure
+
+Now that the data is formatted together in a nice long format, we can move ahead to derive baseline values and change scores for the comparison, and compute some summary stats. While a dot plot of raw individual values is not the strongest choice for this, it gives a good visual representation of the individual data to actually see where individuals are, and adding a dispersion metric through CV/SD should give a reasonable compromise compared to for instance a box plot. CV will be used where SDs are expected to be large, i.e., baseline, while SD will be used for the change. 
+
+CV = SD/mean x 100, and it should correct for situations where group means are substantially different. This is because, if the mean is substantially different, so too will the SDs be. For instance, if a group has a mean of 200 Nm, the SD in that group will almost inevitably be larger than one with 150 Nm.
+
+SD is used in addition to CV where CV has its weaknesses, i.e., change scores. If the mean change is small or close to zero (like with bicep curl, upper body lean mass), CV may become more unstable or uninterpretable; while a mean change of 3 Nm width SD of 11 gives a CV of 367% is technically correct, its meaningless in practice. 
+
+```{r, calculations}
+
+#--- Derive baseline values and change scores ----------------------------------
+
+dat_wide <- dat_long %>%
+  pivot_wider(names_from = time, values_from = value) %>%
+  mutate(change = post - pre) %>%
+  rename(baseline = pre) %>%
+  select(participant, age_grp, outcome, domain, baseline, change)
+
+
+########## NOT WORKING ############################################
+
+#--- Compute summary stats: mean, SD, CV, BF p-value ---------------------------
+
+sum_base <- dat_wide %>%
+  group_by(outcome, age_grp) %>%
+  summarise(
+    m   = mean(baseline, na.rm = TRUE),
+    s   = sd(baseline, na.rm = TRUE),
+    cv  = cv(baseline),
+    .groups = "drop"
+  )
+ 
+sum_chg <- dat_wide %>%
+  group_by(outcome, age_grp) %>%
+  summarise(
+    m   = mean(change, na.rm = TRUE),
+    s   = sd(change, na.rm = TRUE),
+    cv  = cv(change),
+    .groups = "drop"
+  )
+ 
+bf_base <- dat_wide %>%
+  group_by(outcome) %>%
+  summarise(
+    p_bf = bf_p(baseline, age_grp),
+    .groups = "drop"
+  ) %>%
+  mutate(panel = "Baseline")
+ 
+bf_chg <- dat_wide %>%
+  group_by(outcome) %>%
+  summarise(
+    p_bf = bf_p(change, age_grp),
+    .groups = "drop"
+  ) %>%
+  mutate(panel = "Change (pre → post)")
+ 
+bf_all <- bind_rows(bf_base, bf_chg) %>%
+  mutate(label = fmt_p(p_bf))
+
+
+```
+
+### Setting up and creating the figure
+
+```{r, plot function}
+
+#--- Building plot function ----------------------------------------------------
+
+make_panel <- function(dat_ind, dat_sum, bf_dat, x_var, title_str) {
+ 
+  # y positions for age groups (dodge)
+  dodge_w <- 0.5
+  pos <- position_jitter(width = 0, height = 0.12, seed = 42)
+ 
+  # Compute CV annotation string per outcome x age_grp
+  cv_ann <- dat_sum %>%
+    mutate(cv_lab = if_else(!is.na(cv), sprintf("CV: %.0f%%", cv), "CV: —")) %>%
+    select(outcome, age_grp, cv_lab, m, s)
+ 
+  p <- ggplot() +
+    # Individual dots
+    geom_point(
+      data = dat_ind,
+      aes(x = .data[[x_var]], y = age_grp, colour = age_grp),
+      position = position_jitter(height = 0.15, seed = 42),
+      size = 1.8, alpha = 0.5, shape = 16
+    ) +
+    # SD bars (mean ± 1 SD)
+    geom_errorbar(
+  data = dat_sum,
+  aes(xmin = m - s, xmax = m + s, y = age_grp, colour = age_grp),
+  width = 0.15, linewidth = 1.0, orientation = "y"
+) +
+    # Mean dot
+    geom_point(
+      data = dat_sum,
+      aes(x = m, y = age_grp, colour = age_grp),
+      size = 3.5, shape = 21,
+      fill = "white", stroke = 1.8
+    ) +
+    # BF p-value annotation (top right of each facet)
+    geom_text(
+      data = bf_dat,
+      aes(label = label),
+      x = Inf, y = Inf,
+      hjust = 1.08, vjust = 1.8,
+      size = 2.8, colour = "grey40"
+    ) +
+    facet_wrap(~ outcome, scales = "free_x", ncol = 1,
+               strip.position = "left") +
+    scale_colour_manual(values = c("Young" = col_yng, "Older" = col_old),
+                        guide = "none") +
+    scale_y_discrete(limits = rev) +
+    labs(x = NULL, y = NULL, title = title_str) +
+    theme_minimal(base_size = 10) +
+    theme(
+      strip.text.y.left  = element_text(angle = 0, hjust = 1, size = 8.5,
+                                         colour = "grey30"),
+      strip.placement    = "outside",
+      panel.grid.major.y = element_blank(),
+      panel.grid.minor   = element_blank(),
+      panel.grid.major.x = element_line(colour = "grey92", linewidth = 0.4),
+      axis.text.y        = element_text(size = 8.5),
+      axis.text.x        = element_text(size = 8),
+      plot.title         = element_text(size = 10, face = "plain",
+                                         colour = "grey20", hjust = 0.5),
+      panel.spacing      = unit(0.3, "lines"),
+      plot.margin        = margin(4, 8, 4, 4)
+    )
+ 
+  p
+}
+
+
+
+
+```
+
+
+```{r, figure}
+
+#--- Assemble figure -----------------------------------------------------------
+
+# Baseline panel
+p_base <- make_panel(
+  dat_ind  = dat_wide %>% drop_na(baseline),
+  dat_sum  = sum_base,
+  bf_dat   = bf_all %>% filter(panel == "Baseline"),
+  x_var    = "baseline",
+  title_str = "Baseline"
+)
+ 
+# Change panel
+p_chg <- make_panel(
+  dat_ind  = dat_wide %>% drop_na(change),
+  dat_sum  = sum_chg,
+  bf_dat   = bf_all %>% filter(panel == "Change (pre → post)"),
+  x_var    = "change",
+  title_str = "Change (pre → post)"
+)
+ 
+# Legend grob
+legend_grob <- ggplot(
+  data.frame(age_grp = c("Young", "Older"), x = 1:2, y = 1:2)
+) +
+  geom_point(aes(x, y, colour = age_grp), size = 3) +
+  scale_colour_manual(
+    values = c("Young" = col_yng, "Older" = col_old),
+    name   = NULL
+  ) +
+  theme_void() +
+  theme(legend.position = "bottom",
+        legend.text = element_text(size = 9))
+ 
+legend_only <- cowplot::get_plot_component(legend_grob, "guide-box", return_all = TRUE)[[1]]
+ 
+# Domain strip labels via annotations — add as title above each domain group
+# (simplest approach: add facet label via domain in strip; or use patchwork annotation)
+ 
+fig <- (p_base | p_chg) +
+  plot_annotation(
+    title   = "Individual variation by age group: baseline and change scores",
+    caption = "Dots = individual participants. Bar = mean ± 1 SD. BF p = Brown–Forsythe test for equality of variances.\nCV (coefficient of variation) annotated per group. Outcomes averaged across limbs.",
+    theme   = theme(
+      plot.title   = element_text(size = 11, face = "plain", colour = "grey15"),
+      plot.caption = element_text(size = 7.5, colour = "grey50", hjust = 0)
+    )
+  )
+ 
+# Add CV annotations as a separate text layer per facet
+# (these are printed to console so you can verify before adding to plot)
+cat("\n--- CV summary (baseline) ---\n")
+sum_base %>%
+  select(outcome, age_grp, m, s, cv) %>%
+  mutate(across(where(is.numeric), \(x) round(x, 1))) %>%
+  print(n = Inf)
+ 
+cat("\n--- CV summary (change score) ---\n")
+sum_chg %>%
+  select(outcome, age_grp, m, s, cv) %>%
+  mutate(across(where(is.numeric), \(x) round(x, 1))) %>%
+  print(n = Inf)
+ 
+cat("\n--- Brown-Forsythe p-values ---\n")
+bf_all |> select(outcome, panel, p_bf, label) |> print(n = Inf)
+ 
+# ------------------------------------------------------------
+# 6. Save
+# ------------------------------------------------------------
+ 
+ggsave(
+  filename = "figures/fig_variability.png",
+  plot     = fig,
+  width    = 10,
+  height   = 14,
+  dpi      = 300,
+  bg       = "white"
+)
+ 
+message("Saved: figures/fig_variability.png")
+
+
+
+```
+
+
+

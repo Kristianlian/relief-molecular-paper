@@ -1,0 +1,13 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+.html
+*.Rproj
+
+
+
+
+/fits
+/figures/fig-rnaseq.RDS
+/data-raw-rnaseq/

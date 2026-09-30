@@ -1,0 +1,75 @@
+Checking noted deviations in measurement of total RNA
+
+Deviations include:
+- Samples that where noted as "small" during measurement - meaning less than 1.7ul was pipetted on the uDrop plate
+- Samples marked with "NS" (no sample)
+- Samples where the absorbance curved of one of the four replicates deviated from the others
+
+Rules for exclusion
+- All samples marked "NS" will be excluded
+- Samples with a deviating absorbance curve in addition to clear deviation in purity
+- Samples marked as small and clearly deviating in purity/concentration?
+
+Samples for exclusion:
+- 1x of sample 65 - deviating curve and purity below 1.8
+- 1x of sample 89 - deviating curve and purity below 1.8
+- 1x of sample 118 - deviating curve and purity below 1.8
+- All of 120? - 1 sample deviated, but all are below 1.8 purity
+- 1x of sample 122 - deviating curve and purity below 1.8
+- 1x of sample 127? - deviating curve, however purity at 1.89
+- 1x of sample 128? - deviating curve, however purity at 2.04
+- 1x of sample 136? - deviating curve, however purity at 2.08
+- 1x of sample 146? - deviating curve, however purity at 1.87
+- 1x of sample 169 - deviating curve, purity below 1.8
+- 1x of sample 158? - marked as "small", deviating purity (1.93) and concentration
+- 1x of sample 159? - marked as "small", deviating purity (1.81) and concentration
+- 1x of sample 160 - marked as "small", clear deviation in purity and concentration
+- 1x of sample 161 - marked as "NS" (plate 53, well B03)
+- 1x of sample 169? - marked as "small", deviating curve and purity (1.69)
+- 1x of sample 171? - marked as "small", deviating purity (1.92)
+- 1x of sample 186? - marked as "small", deviating purity (1.85) and conc
+- 1x of sample 192? - marked as "small", deviating purity (1.89) and conc
+- 1x of sample 196 - it was marked "NS" (plate 64, well B03)
+- 1x of sample 197? - marked as "small", clear deviation in purity (1.59) and conc
+- 1x sample of 198? - marked as "small", deviation in purity (1.89) and conc
+- 1x sample of 199 - marked as "small", deviation in purity (1.63) and conc
+- 1x sample of 248? - marked as "small", deviation in purity (1.84) and conc
+- 1x sample of 250 - marked as "small", deviation in purity (1.97) and conc
+- 1x sample of 251? - marked as "small", deviation in purity (1.96) and conc
+- 1x sample of 252? - marked as "small", deviation in purity (1.81) and conc
+- 1x sample of 256? - marked as "small", deviation in conc
+- 1x sample of 260? - marked as "small", deviation in purity (1.83) and conc
+- 1x of sample 264? - marked as "Small", deviation in purity (1.88) and conc
+- 1x of sample 266 - marked as "NS" (plate 87, well F03)
+- 1x sample of 268 - marked as "small", clear deviation in curve, purity (1.12) and conc
+- 1x sample of 269 - marked as "small", clear deviation in purity (1.76) and conc
+- 1x sample of 271 - marked as "small", clear deviation in curve, purity (1.29) and conc
+- 1x sample of 272 - marked as "small", clear deviation in curve, purity (1.61) and conc
+- 1x of sample 275? - marked as "small", deviation in purity (1.81) and conc
+- 1x of sample 277? - marked as "small", deviation in curve and purity (1.43)
+- 1x of sample 278? - marked as "small", deviation in curve and purity (1.37)
+- 1x of sample 279 - marked as "NS" (plate 91, well H03)
+- 1x of sample 280? - marked as "small", deviation in purity (1.80) and conc
+- 1x of sample 281 - marked as "small", deviation in curve, purity (1.47) and conc
+- 1x of sample 283 - marked as "small", deviation in curve, purity (1.44) and conc
+- 1x of sample 284 - marked as "small", deviation in curve, purity (1.49) and conc
+- 1x of sample 287 - marked as "small", deviation in curve, purity (1.58) and conc
+- 1x of sample 293 - marked as "small", deviation in curve, purity (1.39) and conc
+- 1x of sample 295 - marked as "small", deviation in curve, purity (1.22) and conc
+- 1x of sample 296 - marked as "small", deviation in curve, purity (1.27) and conc
+- 1x of sample 298 - marked as "small", deviation in curve, purity (1.44) and conc
+- 1x of sample 299 - marked as "small", deviation in curve, purity (1.54) and conc
+- 1x of sample 300? - marked as "small", deviation in purity (1.93) and conc
+- 1x of sample 301? - marked as "small", deviation in purity (1.81) and conc
+- 1x of sample 303 - marked as "small", deviation in curve, purity (1.03) and conc
+- 1x of sample 304? - marked as "small", deviation in purity (1.88) and conc
+- 1x sample of 305 - marekd as "small", deviation in curve, purity (1.50) and conc
+- 1x sample of 307 - marekd as "small", deviation in curve, purity (1.50) and conc
+- 1x sample of 349 - marked as NS (plate 115, well B03)
+
+
+
+
+
+
+

@@ -1,0 +1,55 @@
+---
+title: "Total RNA data visualization"
+format: html
+editor_options: 
+  chunk_output_type: console
+---
+
+
+```{r, setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+
+```
+
+## Purpose
+
+The purpose is to inspect and process the protein concentration data from the "ReLiEf" project. Biopsies were taken before training, after 3 weeks/6 RT sessions and after training. For now, only one sample per leg has been analyzed at baseline, however one sample from each leg after 3 weeks of training. 
+
+```{r}
+
+library(tidyverse)
+
+rna.dat <- reliefdata::relief_rnaconc %>%
+  mutate(participant = ifelse(is.na(participant), "blank", participant),
+         leg = ifelse(is.na(leg), "blank", leg),
+         time = ifelse(is.na(time), "blank", time),
+         weight = ifelse(is.na(weight), "0", weight)) 
+
+participant <- reliefdata::relief_participants %>%
+  select(participant, age, allocation) 
+
+condition <- reliefdata::relief_volume %>%
+  select(participant, condition, leg) %>%
+  mutate(participant = as.character(participant))
+
+
+rna.dat2 <- rna.dat %>%
+  full_join(participant) %>%
+  full_join(condition)
+
+rnadat <- rna.dat2 %>%
+  mutate(age = ifelse(is.na(age), "blank", age),
+         allocation = ifelse(is.na(allocation), "blank", allocation),
+         age.group = ifelse(age < 65, "yng", "old"),
+         time = factor(time, levels = c("pre", "w3", "post")),
+         weight = as.numeric(weight),
+         condition = ifelse(is.na(condition), "blank", condition),
+         condition = case_when(participant %in% c("3071", "3075", "3076",
+                                                  "3083", "3084", "3085",
+                                                  "3086", "3090", "3091",
+                                                  "3094") ~ "none", TRUE ~ condition))
+
+```
+
+

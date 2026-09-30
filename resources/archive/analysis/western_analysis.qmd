@@ -1,0 +1,462 @@
+---
+title: "Western Blot Analysis"
+format: html
+editor_options: 
+  chunk_output_type: console
+---
+
+
+```{r, setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+
+```
+
+
+## Relief Western Blot Analysis
+
+This qmd is made with the purpose of analysing the western blot data, to investigate the change from baseline to 3w across age groups/conditions, specifically for the UBF and c-Myc proteins.
+
+### Data import and check 
+
+The code chunk below imports all the needed data from the relief package. It also checks that the dataframe is sensible, i.e., contains the expected data, filters out NA values (for instance biotin ladder), and sets it up for the models.
+
+```{r, data import and check}
+#--- Packages ------------------------------------------------------------------
+
+library(lme4); library(lmerTest); library(emmeans); library(tidyverse)
+
+
+#---- Data ---------------------------------------------------------------------
+
+ubf_dat <- reliefdata::relief_western
+
+participants <- reliefdata::relief_participants %>%
+  mutate(age_grp = if_else(age < 40, "yng", "old")) %>%
+  select(-sex, -height, -weight) %>%
+  print()
+
+condition <- reliefdata::relief_volume %>%
+  mutate(participant = as.character(participant)) %>%
+  select(-arm) %>%
+  print()
+
+
+#---- Wrangling ----------------------------------------------------------------
+
+# Check plate variable — how many plates were run?
+ubf_dat %>%
+  count(plate)
+
+
+dat_filtered <- ubf_dat %>% 
+  filter(!sample %in% c("24.1", "24.2", "24.3",
+                       "28.1", "28.2", "28.3", "Biot. Ladder"))
+
+
+## These samples are NA, filtering out to clean up the dataframe + no further use for the Biotin ladder in this dataframe
+
+dat_clean <- dat_filtered %>%
+  mutate(across(c(area, corr.area, height, mw_kda, baseline, sn), as.numeric))
+
+# Checking if the means per plate are very different
+dat_clean %>% 
+  group_by(plate) %>% 
+  summarise(mean_area = mean(corr.area))
+
+# How are participants distributed across plates
+dat_clean %>%
+  distinct(participant, plate) %>%
+  count(plate)
+
+dat_clean %>%
+  group_by(participant) %>%
+  summarise(n_plates = n_distinct(plate)) %>%
+  filter(n_plates > 1)
+
+# So, all samples from one participant is on the same plate, thus the condition comparison is unaffected by potential between-plate variation. Between-plate variation could still affect any between participant comparison, though, such as comparing age-groups - adding plate as a random effect in the model to handle this, since we dont have a pool/bridging sample on each plate. 
+
+# Adding allocation/condition info to the data
+
+dat_joined <- dat_clean %>%
+  mutate(participant = as.character(participant)) %>%
+  left_join(condition, by = c("participant", "leg")) %>%
+  left_join(participants, by = "participant")
+
+
+# Quick sanity check
+
+dat_joined %>% 
+  count(condition, age_grp, time)
+
+# Baseline looks off due to only using one sample per participant here (randomly selected right or left), working on the assumption that baseline should be equal within participants. 
+
+dat_joined %>%
+  count(participant, leg, time) %>%
+  filter(n > 1)
+# This is clean, so no duplicate rows or such. 
+
+# Extracting UBF specifically for modelling
+ubf_model_int <- dat_joined %>%
+  filter(allocation == "int",
+         protein == "UBF") %>%
+  select(participant, allocation, leg, time, condition, age_grp, plate, corr.area, mw_kda)
+
+ubf_model_con <- dat_joined %>%
+  filter(age_grp == "old",
+         protein == "UBF") %>%
+  mutate(condition = if_else(allocation == "con", "none", condition)) %>%
+  select(participant, leg, allocation, time, condition, age_grp, plate, corr.area, mw_kda)
+
+
+ubf_model_con %>% count(allocation, condition)
+
+#---- Change-score calculations ------------------------------------------------
+
+# Change-score for young intervention vs. old intervention model
+
+# This work is simply using the one pre sample per participant as a shared baseline, again, since we assume that legs should be quite equal at baseline within-participant
+
+pre_vals <- ubf_model_int %>%
+  filter(time == "pre") %>%
+  select(participant, pre_ubf = corr.area)
+
+dat_change <- ubf_model_int %>%
+  filter(time == "w3") %>%
+  left_join(pre_vals, by = "participant") %>%
+  mutate(delta_ubf = corr.area - pre_ubf)
+
+
+
+# Change-score for old intervention vs. old control model 
+
+pre_vals_con <- ubf_model_con %>%
+  filter(time == "pre") %>%
+  select(participant, pre_ubf = corr.area)
+
+dat_change_con_long <- ubf_model_con %>%
+  filter(time == "w3") %>%
+  left_join(pre_vals_con, by = "participant") %>%
+  mutate(delta_ubf = corr.area - pre_ubf)
+
+
+```
+
+### Modelling UBF
+
+Due to time constraints, only a smaller selection of samples was elected to western blots. We randomly selected 10 young and 10 old, as well as the control participants (n = 10), and took 1 sample from baseline + 2 from week 3 from each participant. This was decided under the assumption that within a participant, there should not be a meaningful variation in these proteins at baseline between legs. This also makes it practically impossible to run the same models as for the body composition and muscle strength data (longitudinal LMMs); there is only 1 observation at baseline per participant, so running the same models with condition (low vs. mod) as a fixed effect would lead to the model making up condition-level baseline values by extrapolation. So, instead, we opt for change-score calculation and analysing those values here, i.e., w3 values minus baseline per participant. 
+
+```{r, model 1}
+
+#---- Model --------------------------------------------------------------------
+mod_ubf_change <- lmer(delta_ubf ~ age_grp * condition + 
+                         (1 | participant),
+                       data = dat_change)
+
+anova(mod_ubf_change)
+summary(mod_ubf_change)
+
+
+# Did the groups actually change from baseline?
+
+dat_change %>%
+  group_by(age_grp) %>%
+  summarise(t_test = list(t.test(delta_ubf, mu = 0))) %>%
+  mutate(
+    t_stat  = map_dbl(t_test, ~ .x$statistic),
+    p_value = map_dbl(t_test, ~ .x$p.value),
+    mean_delta = map_dbl(t_test, ~ .x$estimate),
+    lower_CI = map_dbl(t_test, ~ .x$conf.int[1]),
+    upper_CI = map_dbl(t_test, ~ .x$conf.int[2])
+  ) %>%
+  select(-t_test)
+
+#---- Contrasts ----------------------------------------------------------------
+
+# Intervention model — low vs mod within each age group
+emmeans(mod_ubf_change, ~ condition | age_grp) |>
+  contrast("revpairwise") |>
+  summary(infer = TRUE)
+
+emm_ubf_int
+
+
+# Saving data for plotting
+saveRDS(dat_change, ("./data/data-gen/ubf_change.rds"))
+
+
+
+
+```
+
+**Result summary model 1: UBF levels between young/old intervention**
+
+Intervention model: delta_ubf ~ age_grp * condition + (1 | participant)
+N = 40 observations, 20 participants (10 young int, 10 old int)
+
+Fixed effects (ANOVA):
+- Age group:           F(1, 18.0) = 0.00, p = .952
+- Condition:           F(1, 18.0) = 0.06, p = .812
+- Age × Condition:     F(1, 18.0) = 0.02, p = .903
+
+Condition contrast — Mod vs. Low within age group (emmeans, 95% CI):
+- Old:   +1042 au [-7447, 9532],  t(18) = 0.258, p = .799
+- Young:  +338 au [-8152, 8827],  t(18) = 0.084, p = .934
+
+T-test for time
+- Old:     t-stat = 1.17,   p = 0.256,     [-4458, 15782]
+- Young:   t-stat = 3.01,   p = 0.00721,   [1855, 10333]
+
+Bottom line: No condition or age group effect on UBF change. Estimates are trivially small relative to CIs in both age groups, with no hint of a dose-response pattern in either direction.
+
+```{r, model 2}
+
+#---- Model --------------------------------------------------------------------
+
+
+mod_ubf_con <- lmer(delta_ubf ~ allocation + (1 | participant),
+                    data = dat_change_con_long)
+
+summary(mod_ubf_con)
+anova(mod_ubf_con)
+
+# Did the change differ between groups?
+dat_change_con_long %>%
+  group_by(allocation) %>%
+  summarise(t_test = list(t.test(delta_ubf, mu = 0))) %>%
+  mutate(
+    t_stat  = map_dbl(t_test, ~ .x$statistic),
+    p_value = map_dbl(t_test, ~ .x$p.value),
+    mean_delta = map_dbl(t_test, ~ .x$estimate),
+    lower_CI = map_dbl(t_test, ~ .x$conf.int[1]),
+    upper_CI = map_dbl(t_test, ~ .x$conf.int[2])
+  ) %>%
+  select(-t_test)
+
+
+#---- Contrasts ----------------------------------------------------------------
+emmeans(mod_ubf_con, ~ allocation) |>
+  contrast("revpairwise") |>
+  summary(infer = TRUE)
+
+emm_ubf_con
+
+
+
+#---- Saving data for plotting -------------------------------------------------
+# Using the change score data for now
+
+
+saveRDS(dat_change_con, ("./data/data-gen/ubf_change_con.rds"))
+
+
+
+
+```
+
+**Result summary model 2: UBF levels between old intervention/control**
+
+Control comparison: delta_ubf ~ allocation + (1 | participant)
+Older adults only — N = 36 observations, 18 participants (10 int, 8 con)
+
+Fixed effects (ANOVA):
+- Allocation:          F(1, 16.0) = 0.02, p = .900
+
+Allocation contrast — Int vs. Con (emmeans, 95% CI):
+- Int vs. Con: +1147 au [-17861, 20155], t(16) = 0.128, p = .900
+
+T-test for time
+- Int:     t-stat = 1.17,   p = 0.256,     [-4458, 15782]
+- Con:     t-stat = 1.13,   p = 0.278,     [-4036, 13066]
+
+Bottom line: No difference in UBF change between intervention and control older adults. The CI spans roughly ±19000 au, reflecting large between-participant variance relative to the effect estimate.
+
+Of note: Control older adults showed a near-identical UBF increase to intervention participants. This mirrors the total RNA findings and is a key result for supervisor discussion — the molecular response appears independent of resistance training per se.
+
+Final comments on all comparisons:
+
+The models doesn't actually support "only young increased". The age group main effect in the ANOVA was F(1, 18) = 0.004, p = .952, meaning there's no evidence the two age groups responded differently. The divergence in t-test results is a statistical power issue, not a real biological difference — young had lower within-group variance and/or a more consistent response, which pushed them over the significance threshold.
+
+The cleaner interpretation is: UBF increased overall (t(39) = 2.27, p = .029), but this increase was not associated with training — it appeared in controls too, and didn't differ by age group or condition in the model.
+
+
+
+
+
+
+<!---
+
+--------------------------------------------- OLD CODE BELOW --------------------------------------------------------
+### Modelling
+
+The code chunk below contains the model for analysing amount of UBF measured at baseline and post. The data is described in the "reliefdata" package, but briefly, we are using the "corr.area" values which is the peak area with background correction. So, the model tries to explain the corrected area observed by age_group, condition and time (fixed effects), with participant and plate as random effects. The fixed effects are separated by an *, which means we want all main effects and all interactions between those variables, expanding to:
+
+- Main effects: age_group, condition, time
+- Two-way: age_group:condition, age_group:time, condition:time
+- Three-way: age_group:condition:time
+
+Here we use both participant and plate as random intercepts (random effects). Participant is added to account for the fact that measurements are nested within individuals, and adding "1 |" means that we're fitting a random intercept, allowing each participant to have their own baseline level of corrected area, to absorb the individual difference that could otherwise inflate the residual error. Other models will have "1 | participant/leg", which means that "leg" is nested within participant - this is simply to account for our within-participant design. "/leg" is however dropped in cases where it returns "isSingular", which means that the there is not enough information to separate leg-level variance from participant-level variance, or that the leg-level variance is not greater than the participant-level variance, rendering it useless. Plate is also added as a random effect here, since we dont have a between plate control sample on the physical plates. 
+
+So, at its core, the model is asking: after accounting for the fact that repeated measurements on the same person are correlated, what are the fixed effects of age group, condition, and time on the corrected peak area? Then we use an anova to get an output with F-tests for each of those terms, and emmeans lets us extract the specific group means and constrasts to distinguish where the differences, if present, lies.  
+
+#### Model 1
+
+This first model is specific to our UBF measurements, from participants in the young and old intervention groups.
+
+```{r, model 1}
+
+#--- Model ---------------------------------------------------------------------
+mod_ubf_int <- lmer(corr.area ~ age_grp * condition * time + 
+                      (1 | participant) + (1 | plate),
+                    data = ubf_model_int)
+
+summary(mod_ubf_int)
+
+
+#--- Emmeans -------------------------------------------------------------------
+
+# emmeans output
+emm_ubf <- emmeans(mod_ubf_int, ~ time * condition | age_grp)
+emm_ubf
+
+# and/or the anova table
+anova(mod_ubf_int)
+
+
+```
+
+**Results summary model 1: Young intervention vs. old intervention**
+
+Main analysis
+
+- Overall time effect: significant (F(1,33.3) = 4.25, p = .047)
+- Age group effect: significant (F(1,18.0) = 5.90, p = .026)
+- Condition effect: non-significant (F(1,39.7) = 2.47, p = .124)
+- Age × Condition: no interaction (F(1,39.7) = 1.85, p = .182)
+- Age × Time: no interaction (F(1,33.3) = 0.003, p = .953)
+- Condition × Time: no interaction (F(1,39.7) = 1.82, p = .185)
+- Age × Condition × Time: no interaction (F(1,39.7) = 1.55, p = .220)
+
+Subgroup pre→w3 % change (from emmeans):
+
+- Old,  Low: +58.3%  (23534 → 37252)
+- Old,  Mod: −5.9%   (40688 → 38294)
+- Yng,  Low: +34.1%  (18515 → 24835)
+- Yng,  Mod: +29.1%  (19503 → 25173)
+
+Notable: Old/Mod shows a large pre value (40688 vs 23534 in Old/Low), driving the apparent condition main effect at pre rather than a differential training response — worth inspecting baseline balance.
+
+Summary: UBF increased pre→w3 overall, driven primarily by the old/low subgroup (+58.3%). No condition × time or age × condition × time interactions, so volume dose and age did not differentially affect UBF response. The significant age main effect reflects higher overall UBF in older adults across both timepoints.
+
+Worth flagging: old/mod baseline emmean (40 688) is notably higher than old/low baseline (23 534), which is likely what is driving the significant condition:mod fixed effect seen in the summary.
+
+#### Model 2
+
+The next model (2) is also for UBF, but compares the old intervention and old control group, trying to explain the corrected area by allocation (intervention/control) and time.
+
+```{r, model 2}
+
+#--- Model ---------------------------------------------------------------------
+mod_ubf_con <- lmer(corr.area ~ allocation * time + 
+                      (1 | participant) + (1 | plate),
+                    data = ubf_model_con)
+
+summary(mod_ubf_con)
+
+
+#--- Emmeans -------------------------------------------------------------------
+
+# emmeans output
+emm_ubf_con <- emmeans(mod_ubf_con, ~ time | allocation)
+emm_ubf_con
+
+# and/or the anova table
+anova(mod_ubf_con)
+
+
+
+
+```
+
+**Results summary model 2: Old intervention vs. old control**
+
+Main analysis
+
+- Allocation effect: non-significant (F(1,2.1) = 0.46, p = .564)
+- Time effect: non-significant (F(1,34.0) = 2.04, p = .163)
+- Allocation × Time: no interaction (F(1,34.0) = 0.026, p = .873)
+
+Pre→w3 % change (from emmeans):
+
+- Control:      +17.2%  (26281 → 30796)
+- Intervention: +17.2%  (32929 → 38592)
+
+Summary: UBF increased similarly in both control (+17.2%) and intervention (+17.2%) groups pre→w3, with no significant allocation effect, time effect, or interaction. The near-identical % change is striking.
+
+Worth flagging: Degrees of freedom for allocation are very low (df=2.1), a consequence of the large plate variance inflating uncertainty at the group level. This means the allocation comparison has very limited power, the non-significant result should be interpreted cautiously rather than as strong evidence of equivalence.
+
+
+Figure to visualise these data:
+
+```{r}
+
+ubf_summary <- dat_joined |>
+  mutate(time = factor(time, levels = c("pre", "w3"))) |>
+  mutate(group = case_when(
+    allocation == "con"             ~ "Old Control",
+    allocation == "int" & age_grp == "yng" ~ "Young Int",
+    allocation == "int" & age_grp == "old" ~ "Old Int"
+  )) |>
+  group_by(group, time) |>
+  summarise(mean_ubf = mean(corr.area, na.rm = TRUE), .groups = "drop")
+
+ubf_points <- dat_joined |>
+  mutate(time = factor(time, levels = c("pre", "w3"))) |>
+  mutate(group = case_when(
+    allocation == "con"             ~ "Old Control",
+    allocation == "int" & age_grp == "yng" ~ "Young Int",
+    allocation == "int" & age_grp == "old" ~ "Old Int"
+  ))
+
+group_colours <- c(
+  "Young Int"   = "#E69F00",  # orange
+  "Old Int"     = "#56B4E9",  # sky blue
+  "Old Control" = "#009E73"   # bluish green
+)
+
+# These colours are from the Okabe-Ito palette, supposedly the gold standard for colorblind-safe palettes.
+
+p_ubf <- ggplot() +
+  geom_point(data = ubf_points,
+             aes(x = time, y = corr.area, colour = group, group = group),
+             position = position_jitter(width = 0.1, seed = 42),
+             alpha = 0.4, size = 1.5) +
+  geom_line(data = ubf_summary,
+            aes(x = time, y = mean_ubf, colour = group, group = group),
+            linewidth = 1.2) +
+  geom_point(data = ubf_summary,
+             aes(x = time, y = mean_ubf, colour = group, group = group),
+             size = 3) +
+  scale_colour_manual(values = group_colours) +
+  scale_x_discrete(labels = c("pre" = "Baseline", "w3" = "Week 3")) +
+  labs(x = NULL, y = "UBF (corrected area)", colour = NULL,
+       title = "UBF") +
+  theme_classic() +
+  theme(legend.position = "bottom")
+
+
+group_cols
+
+
+```
+
+
+-->
+
+
+
+
+
+
+
+

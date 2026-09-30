@@ -1,0 +1,13 @@
+---
+title: "Untitled"
+format: html
+---
+1. Do we overlay the raw data into the figures, for instance via thin/transparent lines - that would show both what occurd in our collection and what our models predict. 
+
+2. c-Myc low peak — unresolved sampling instability
+
+Even at adapt_delta = 0.999, shows residual divergences, low BFMI in 2/4 chains, and posterior estimates with pos ≈ 0.5 across every contrast (essentially uninformative).
+Not yet resolved. Likely needs a simplified random-effects structure (e.g., dropping (1|participant:leg) or decorrelating (1+time|participant)).
+Question for Daniel: how to proceed — simplify the model, or handle differently?
+
+

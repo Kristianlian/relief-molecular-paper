@@ -1,0 +1,597 @@
+---
+title: "Total RNA Analysis"
+format: html
+editor_options: 
+  chunk_output_type: console
+---
+
+
+```{r, setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+
+```
+
+
+## Relief Total RNA analysis
+
+This qmd is made with the purpose of analysing the total RNA data, to investigate the change from baseline to 3w and post between age groups/conditions. The raw absorbanca data is imported from the "reliefdata" package, and will be tidied up for modelling in this qmd. 
+
+The inital import here contains a hardcoded filter that excludes dropouts/to low adherence <!-- do we still want to keep their baseline data in? --> to exercise during the intervention and samples marked with "NS" (no sample) from the extraction.
+
+```{r, packages and data import}
+
+#---- Packages -----------------------------------------------------------------
+library(lme4); library(lmerTest); library(emmeans); library(tidyverse); library(e1071)
+
+
+#---- Data ---------------------------------------------------------------------
+rna_dat <- reliefdata::relief_rnaconc %>%
+  filter(!participant %in% c("3004", "3005", "3010", "3012", "3017", "3019",
+                              "3026", "3033", "3034", "3046", "3053", "3069",
+                              "3092")) %>%
+  filter(!(plate == "Plate 53" & well == "B03") &
+       !(plate == "Plate 64" & well == "B03") &
+       !(plate == "Plate 87" & well == "F03") &
+       !(plate == "Plate 91" & well == "H03") &
+       !(plate == "Plate 115" & well == "B03")) #drops "no sample" replicates within samples
+
+
+participants <- reliefdata::relief_participants %>%
+  mutate(age_grp = if_else(age < 40, "yng", "old")) %>%
+  select(-sex, -height, -weight)
+
+condition <- reliefdata::relief_volume %>%
+  mutate(participant = as.character(participant)) %>%
+  select(-arm)
+
+
+```
+
+Blank was already removed in the SkanIt software, but we still need to add the dilution factor, and normalise the data to wet muscle weight. The first code below takes care of this, as well as filtering out any sample that does not pass the 1.80 purity check (260/280 ratio). 
+
+
+# ---- Plate Normalisation — NOT APPLIED ---------------------------------------
+# Each NanoDrop plate contains all three timepoints from a single participant,
+# meaning plate median-centering would remove within-participant longitudinal
+# variation — i.e., the biological signal under investigation. Normalisation
+# is therefore structurally inappropriate and raw concentrations are used.
+
+```{r, packages and data import}
+
+#---- Data Cleanup -------------------------------------------------------------
+
+# First, checking for any NA observations
+rna_dat %>% 
+  filter(is.na(participant)) %>% 
+  count(sample)
+# Confirms that all NA's are introduced by Blank samples from NanoDrop, which does not exist in the rand_code. So, we can safely use the !is.na(participant) filter and only remove Blanks
+
+# Cleanup pipeline 
+# Filters out NA's that we've already, and samples below 1.8 purity
+
+rna_clean <- rna_dat %>%
+  filter(!is.na(participant)) %>%  
+  # drop blanks explicitly, upfront
+  
+  filter(purity >= 1.8) %>%                
+  # no NA exception needed once blanks are gone
+  
+  mutate(rna_per_mg = (conc * 4 * 25) / weight) %>%
+  # adds the dilution factor (1:4 dil, 25ul as diluent)
+  
+  group_by(participant, leg, time) %>%
+  summarise(
+    rna_per_mg = mean(rna_per_mg, na.rm = TRUE),
+    n_reps     = n(),
+    .groups    = "drop"
+  ) 
+  # Lastly, average all replicates of a sample for a mean measurement per participant, leg, timepoint
+ # filter(n_reps >= 2)                      
+ # This last filter excludes any group where only one replicate survives, since one could argue that a single surviving replicate after purity filtering is unreliable. Ask Daniel about this.
+
+# How many rows in the datafram? I.e., any duplicates or unexpected rows?
+nrow(rna_clean) 
+# 344 rows, meaning 344 samples pass the purity filter
+
+# how many groups have 1, 2, 3 or 4 replicates?
+rna_clean %>% count(n_reps) 
+# This is a nice check, if there are many cases of groups with only 1 out of 4 replicates, it could introduce a degree of uncertainty in the data. However, only 2 groups with 1 replicate here, unlikely to be a major issue
+
+# How many participants with fewer or more than three timepoints?
+rna_clean %>% 
+  count(participant, leg) %>% 
+  filter(n != 3) %>%
+  print(n = Inf)
+# Gives a list of incomplete "sets", i.e. missing one or more timepoints
+
+# Are any of the timepoints systematically underrepresented?
+rna_clean %>% count(time)
+# There is a decline from pre -> w3 -> post here, not entirely balanced
+
+```
+
+The cleanup shows a retention of ca. 88.2%. In total, 65 participants was represented in this dataset (after filtering for dropouts), giving a theoretical maximum 390 observations. Five individual wells (replicates) were excluded as "no sample", giving 46 missing observations excluded by purity failures. So the final actual number of observations for analysis i 344, or 88.2%, across pre, w3, and post. 
+
+The next step prior to modelling is merging total RNA data with metadata (participant and condition info), which is done in the code chunk below. 
+
+```{r, prepping for modelling}
+
+# Merge Metadata 
+rna_model_dat <- rna_clean %>%
+  mutate(participant = as.character(participant)) %>%
+  left_join(participants, by = "participant") %>%
+  left_join(condition,    by = c("participant", "leg")) %>%
+  mutate(
+    time      = factor(time,      levels = c("pre", "w3", "post")),
+    age_grp   = factor(age_grp,   levels = c("old", "yng")),
+    condition = factor(condition, levels = c("low", "mod")),
+    log_rna   = log(rna_per_mg)
+  )
+
+# Check that rows are retained after merge
+nrow(rna_model_dat)
+
+# Make sure no NAs are introduced after merge
+rna_model_dat %>% filter(is.na(age_grp) | is.na(condition)) %>% nrow()
+
+# Quality control
+# The code below flags samples with an SD greater than 3 from the group mean
+rna_qc <- rna_model_dat %>%
+  group_by(time) %>%
+  mutate(
+    mean_rna = mean(rna_per_mg, na.rm = TRUE),
+    sd_rna   = sd(rna_per_mg, na.rm = TRUE),
+    z_score  = (rna_per_mg - mean_rna) / sd_rna,
+    outlier  = abs(z_score) > 3
+  ) %>%
+  ungroup()
+
+# Check flagged samples
+rna_qc %>% filter(outlier) %>%
+  select(participant, leg, time, rna_per_mg, z_score)
+# 3 samples in total, seems a bit spread? Before deciding what to
+# do about these, check their 260/280 ratio.
+
+# Quick count
+rna_qc %>% count(time, outlier)
+
+# Note: biopsy weight (used in rna_per_mg calculation) is no longer in rna_model_dat
+# after joining participants — this is expected and fine since rna_per_mg was already calculated
+
+```
+
+Let's have a look at the data before analysing it!
+
+
+```{r, fig}
+
+names(rna_model_dat)
+
+rna_summary <- rna_model_dat %>%
+  mutate(time = factor(time, levels = c("pre", "w3", "post"))) %>%
+  mutate(group = case_when(
+    allocation == "con"             ~ "Old Control",
+    allocation == "int" & age_grp == "yng" ~ "Young Int",
+    allocation == "int" & age_grp == "old" ~ "Old Int"
+  )) %>%
+  group_by(group, time) %>%
+  summarise(mean_rna = mean(rna_per_mg, na.rm = TRUE), .groups = "drop")
+
+rna_points <- rna_model_dat %>%
+  mutate(time = factor(time, levels = c("pre", "w3", "post"))) %>%
+  mutate(group = case_when(
+    allocation == "con"             ~ "Old Control",
+    allocation == "int" & age_grp == "yng" ~ "Young Int",
+    allocation == "int" & age_grp == "old" ~ "Old Int"
+  ))
+
+group_colours <- c(
+  "Young Int"   = "#E69F00",  # orange
+  "Old Int"     = "#56B4E9",  # sky blue
+  "Old Control" = "#009E73"   # bluish green
+)
+
+p_rna <- ggplot() +
+  geom_point(data = rna_points,
+             aes(x = time, y = rna_per_mg, colour = group, group = group),
+             position = position_jitter(width = 0.1, seed = 42),
+             alpha = 0.4, size = 1.5) +
+  geom_line(data = rna_summary,
+            aes(x = time, y = mean_rna, colour = group, group = group),
+            linewidth = 1.2) +
+  geom_point(data = rna_summary,
+             aes(x = time, y = mean_rna, colour = group, group = group),
+             size = 3) +
+  scale_colour_manual(values = group_colours) +
+  scale_x_discrete(labels = c("pre" = "Baseline", "w3" = "Week 3", "post" = "Post")) +
+  labs(x = NULL, y = "Total RNA (ng/\u00b5L/mg)", colour = NULL,
+       title = "Total RNA") +
+  theme_classic() +
+  theme(legend.position = "bottom")
+
+# Scatterplot total RNA and muscle weight (wet)
+
+rna_dat %>%
+  filter(!is.na(participant)) %>%
+  filter(purity >= 1.8) %>%
+  mutate(total_rna = (conc * 4 * 25)) %>%
+  ggplot(aes(x = weight, y = total_rna)) +
+  geom_point(alpha = 0.4, size = 1.5) +
+  geom_smooth(method = "lm", se = TRUE, colour = "firebrick") +
+  labs(x = "Biopsy weight (mg)", y = "Total RNA",
+       title = "Total RNA yield vs biopsy weight") +
+  theme_classic()
+
+# Which samples are the "outliers" from the scatterplot?
+rna_dat %>%
+  filter(!is.na(participant)) %>%
+  filter(purity >= 1.8) %>%
+  mutate(rna_per_mg = (conc * 4 * 25) / weight) %>%
+  arrange(desc(rna_per_mg)) %>%
+  select(participant, leg, time, sample, weight, conc, purity, rna_per_mg) %>%
+  head(5)
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<!--
+--------------------------------------------------------------------------------------------------------------
+OLD COMMENTS/CONSIDERATIONS - made prior to discovering and fixing the randomization key issues
+--------------------------------------------------------------------------------------------------------------
+
+
+```{r}
+
+#-------------------------------------------------------------------------------
+# Old comments - NO LONGER APPLICABLE
+#-------------------------------------------------------------------------------
+
+# All of these comments were made prior to discovering and fixing a massive error in the randomization code, therefore these do no longer count, but keeping them for historical purposes
+
+# Notes from data checks:
+# - No negative/zero concentrations, minimum 2.91 ng/µL
+# - 4 replicates per sample (4 NanoDrop drops)
+# - 7 singleton ghost entries from randomisation join (no actual measurements) — excluded via n_reps >= 2
+# - 3076 R w3: two samples misassigned in rnaex_randomization.xlsx (samples 328 and 329,
+#   different weights) — entire combination excluded pending lab verification
+# - High ng/mg values (3046, 3065, 3037) explained by small biopsy weights — valid, retained
+# - Purity filter: 84/1559 replicates below 1.8; only 4 samples with ≥3/4 bad replicates
+# - Samples flagged for re-running: 3031 L pre (4/4 bad), 3037 L post (3/4 bad)
+# - Sample flagged but retained: 3006 R w3 (3/4 bad, borderline mean 1.74)
+# - Elution volume: 25 µL; total RNA expressed as ng per mg tissue
+# - NA plate: 6 samples with no plate assignment excluded (participants 3021, 3028, 3038, 3040)
+# - 7 samples present in randomisation key but absent from NanoDrop data — these were
+#   collected as biopsies but terminated during extraction. Previously appeared as ghost
+#   rows in relief_rnaconc due to full_join; fixed at package level (left_join). No
+#   downstream filtering required.
+
+
+#
+# plate_medians <- rna_dat %>%
+#   group_by(plate) %>%
+#   summarise(plate_median = median(conc, na.rm = TRUE), n = n(), .groups = "drop") %>%
+#   filter(n >= 8, plate_median > 10, !is.na(plate))
+# grand_median <- median(plate_medians$plate_median)
+# plate_medians <- plate_medians %>% mutate(correction_factor = grand_median / plate_median)
+# rna_dat2 <- rna_dat %>%
+#   left_join(plate_medians %>% select(plate, correction_factor), by = "plate") %>%
+#   mutate(conc_norm = conc * correction_factor)
+# ------------------------------------------------------------------------------
+
+
+```
+
+
+
+Re-run: 3031 L pre, 3037 L post (only 1 valid replicate, very low purity on others)
+Flag but retain for now: 3006 R w3 (1 valid replicate, borderline purity)
+Exclude (no valid data): 3021 R pre, 3028 L pre, 3028 R w3, 3038 R post, 3040 L post, 3040 L w3
+
+### Rank instability check
+
+Since there is quite some spread in the data, and by the looks of it its quite contradictory to what is to be expected for total RNA after such an intervention, we'll be running rank instability across the participants as an informative diagnostic. What we're trying to figure out is if there are participants that have measurements all over the scale, is the flat/absent response uniform across participants, or are there a few individuals pulling the average in unexpected directions?
+
+The resulting spaghetti plot will show either crossin lines for rank instability or stable lines for consistent responders/non-responders.
+
+```{r rank instability}
+
+rna_ranked <- rna_model_dat %>%
+  group_by(time) %>%
+  mutate(rank_rna = rank(rna_per_mg, ties.method = "average")) %>%
+  ungroup() %>%
+  unite("participant_leg", participant, leg, remove = FALSE)
+
+rna_ranked %>%
+  ggplot(aes(x = time, y = rank_rna, group = participant_leg, colour = age_grp)) +
+  geom_line(alpha = 0.5) +
+  geom_point() +
+  facet_grid(age_grp ~ condition) +
+  labs(x = "Time", y = "Rank (RNA per mg", colour = "Age group") +
+  theme_bw()
+
+# There are some participants with missing timepoints which may distort the ranks (since ranks are computed across all legs at each timepoint). Checking who's missing what: 
+
+rna_model_dat %>%
+  unite("participant_leg", participant, leg, remove = FALSE) %>%
+  group_by(participant_leg) %>%
+  summarise(
+    timepoints_present = paste(sort(as.character(time)), collapse = ", "),
+    n_timepoints = n(),
+    .groups = "drop"
+  ) %>%
+  filter(n_timepoints < 3) %>%
+  print(n = Inf)
+
+# 53 incomplete legs, could de quite substantial
+# Some of these only have one timepoint (3011, 3018, 3040, 3055, 3056, 3058_R, 3068, 3084) = simply noise in this rank plot
+# Some have missing baseline (3021_R, 3023_L, 3028_L, 3031_L, etc.) = no baseline rank to anchor againts, quite problematic for rank stability check
+# Some have missing post (3035_R, 3038_R, 3045_L, etc.) = incomplete trajectories in the other direction
+
+## For the rank plot, we'll restrict data to complete cases only:
+
+# How many legs before filtering for complete cases
+rna_model_dat %>%
+  unite("participant_leg", participant, leg, remove = FALSE) %>%
+  distinct(participant_leg) %>%
+  nrow()
+# 128
+
+
+complete_legs <- rna_model_dat %>%
+  unite("participant_leg", participant, leg, remove = FALSE) %>%
+  group_by(participant_leg) %>%
+  filter(n() == 3) %>%
+  ungroup()
+
+# How much does the filter remove?
+complete_legs %>%
+  distinct(participant_leg) %>%
+  nrow()
+# 75 complete legs remain, thats only 59% complete cases..
+
+# From 128 down to 75 legs, does that skew the data? I.e., are there more young or more from one condition after filtering?
+complete_legs %>%
+  distinct(participant_leg, condition, age_grp) %>%
+  count(age_grp, condition)
+# This shows that the data is not scewed, however missing a substantial part for the plot
+
+rna_ranked_complete <- complete_legs %>%
+  group_by(time) %>%
+  mutate(rank_rna = rank(rna_per_mg, ties.method = "average")) %>%
+  ungroup()
+
+ggplot(rna_ranked_complete, aes(x = time, y = rank_rna, 
+                                 group = participant_leg, 
+                                 colour = age_grp)) +
+  geom_line(alpha = 0.5) +
+  geom_point() +
+  facet_grid(age_grp ~ condition) +
+  labs(x = "Time", y = "Rank (RNA per mg)", colour = "Age group") +
+  theme_bw()
+
+rna_ranked_complete
+
+```
+
+What does it show?
+
+- Crossing lines that are pervasive, not isolated to a few individuals, like a population-wide pattern
+- It is somewhat worse at w3 than post, with several lines converging or crossing at w3 then partially restabilise by post, visible in both age groups
+- Young show more particularly dramatic rank swings, especially in the mod condition - a few lines go from top-ranked at pre to bottom at w3 or vice versa
+
+This level of instability seems more consistent with measurement noise or sampling quality variation than with a true biological signal being absent. If it were purely biological (i.e., people genuinly not responding), we'd expect more stable ranks with a flat but consistent trajectory and not this degree of crossing.
+
+So based on this, it is likely that our total RNA measurements have meaningful technical variability that is obscuring any biological signal, which would explain both the absent pre -> w3 increase and the instability here. 
+
+It is critical to determine if this instability is within-plate or between-participant. If participants measured on the same plate show similar rank instability as participants measured across different plates, the problem is biological/sample quality. If instability clusters by plate, normalisation would partiallyt fix it, but at the risk of overcorrecting the signal
+
+```{r, plate check}
+
+# Getting plate info
+
+plate_key <- rna_dat %>%
+  filter(!is.na(participant)) %>%
+  distinct(participant, leg, time, plate) %>%
+  mutate(participant = as.character(participant))
+
+rna_ranked_complete2 <- rna_ranked_complete %>%
+  left_join(plate_key, by = c("participant", "leg", "time"))
+
+# Checking for many-to-one plate issues (did the join work cleanly)
+
+rna_dat %>%
+  filter(!is.na(participant)) %>%
+  distinct(participant, leg, time, plate) %>%
+  mutate(participant = as.character(participant)) %>%
+  group_by(participant, leg, time) %>%
+  filter(n() > 1)
+
+rna_ranked_complete2 %>%
+  filter(is.na(plate)) %>%
+  select(participant, leg, time)
+
+# Plate-level summary to see whether median RNA varies systematically across plates and timepoints:
+
+rna_ranked_complete2 %>%
+  group_by(plate, time) %>%
+  summarise(
+    median_rna = median(rna_per_mg),
+    sd_rna = sd(rna_per_mg),
+    n = n(),
+    .groups = "drop"
+  ) %>%
+  arrange(plate, time) %>%
+  print(n = Inf)
+
+distinct(rna_model_dat, allocation)
+
+```
+
+
+So each plate contains 3 samples × 4 replicates = 12 measurements, and samples are numbered sequentially across plates. That means each plate is a genuine batch run — multiple different participants' samples processed together on the same NanoDrop run.
+
+This makes plate median centering defensible in principle, because we have a real shared technical context per plate. But it immediately raises a different question: why does our summary table show mostly n=1 or n=2 per plate per timepoint? If each plate has 3 samples and samples correspond to participant/leg/timepoint combinations, you'd expect ~3 observations per plate in the summary — but most plates show 1. That suggests either:
+
+The plate numbering in rna_dat doesn't correspond to these physical NanoDrop plates — i.e., plate got assigned at the replicate level and the numbering scheme is different from what's on your physical plate layout
+Most of the 3 samples per physical plate come from different timepoints, so grouping by plate × time only captures 1 per cell
+
+Checking what participants and timepoints map to samples 1, 2, 3 on plate 1 below
+
+```{r}
+
+rna_dat %>%
+  filter(plate == "Plate 1", !is.na(participant)) %>%
+  distinct(participant, leg, time, sample)
+
+
+```
+
+This confirms option 2, each physical plate contains samples from the same participant but different timepoints, so plate median centering is correcting for within-participant, cross-timepoint variation, which is exactly the biological signal we're looking for. 
+
+I.e. median centering is not suitable as a between-plate normalization, alternatively we could add plate as a random effect in the model. 
+
+Further, this also means that the observed instability is within-plate, since each plate contains one participants pre, w3 and post samples, any rank crossing seen in the spaghetti plot is happening within the same NanoDrop run. There's no between-plate scaling issues to correct for. 
+
+Which means the variation is either:
+
+1. Biological - genuine within-participant fluctuation in RNA content across timepoints
+2. Sample quality - degradation, pipetting error, or tissue weight inaccuracy affecting specific timepoints for specific participants
+3. Extraction variability - inconsistent RNA yield from the tissue homogenisation step, which would be random with respect to timepoint
+
+Im gonna lean towards option 2 and 3 here, since the data looks quite different than expected, and at least what I've seen in terms of total RNA. 
+
+
+```{r, RNA model}
+
+#--- Intervention model --------------------------------------------------------------------------
+
+rna_model_dat <- rna_model_dat %>%
+  mutate(log_rna = log(rna_per_mg))
+
+# Fit intervention model
+mod_rna_int <- lmer(log_rna ~ age_grp * condition * time + (1 | participant),
+                    data = rna_model_dat %>% filter(allocation == "int"))
+
+summary(mod_rna_int)
+anova(mod_rna_int)
+
+### The results
+
+# Age:                    F(1, 260.0) = 0.26, p = .607
+# Condition:              F(1, 260.0) = 0.24, p = .628
+# Time:                   F(2, 260.0) = 3.85, p = .023
+# Age × Condition:        F(1, 260.0) = 0.16, p = .693
+# Age × Time:             F(2, 260.0) = 3.24, p = .041
+# Condition × Time:       F(2, 260.0) = 0.36, p = .699
+# Age × Condition × Time: F(2, 260.0) = 0.90, p = .410
+
+# The singular fit warning is worth noting — the participant random effect variance collapsed to zero. This means there's essentially no between-participant variance left after the fixed effects are accounted for, which is unusual. It could suggest the model is slightly overparameterized for this sample size, or that the within-person structure isn't being captured well. It won't bias your estimates but the standard errors may be slightly off.
+
+#--- Emmeans age x time -------------------------------------------------------------------------
+
+
+### Extracting emmeans for plotting
+
+emm_int <- emmeans(mod_rna_int, ~ time | age_grp) %>% 
+  as.data.frame()
+saveRDS(emm_int, "./data/data-gen/emm_rna.rds")
+
+### Running contrasts for the time interaction
+emmeans(mod_rna_int, ~ time | age_grp) %>% 
+  contrast("pairwise") %>% 
+  summary(infer = TRUE)
+
+# Old:  pre–post: β = 0.363, p = .0008; w3–post: β = 0.310, p = .006; pre–w3: ns
+# Young: all contrasts ns (all p > .86)
+
+
+#--- Control model -------------------------------------------------------------------------------
+
+mod_rna_old <- lmer(log_rna ~ allocation * condition * time + (1 | participant),
+                    data = rna_model_dat %>% filter(age_grp == "old"))
+
+summary(mod_rna_old)
+anova(mod_rna_old)
+
+### The results
+
+# Allocation:                   F(1, 180.0) = 0.08, p = .772
+# Condition:                    F(1, 180.0) = 0.43, p = .512
+# Time:                         F(2, 180.0) = 4.63, p = .011
+# Allocation × Condition:       F(1, 180.0) = 0.51, p = .477
+# Allocation × Time:            F(2, 180.0) = 0.34, p = .711
+# Condition × Time:             F(2, 180.0) = 0.12, p = .891
+# Allocation × Condition × Time F(2, 180.0) = 0.16, p = .856
+
+# Time sig, but not allocation x time, i.e., RNA increased in the old, but not limited to the intervention group
+
+# Unpack this with emmeans contrasts
+
+#--- Emmeans -------------------------------------------------------------------------------------
+
+### Getting emmeans for plotting
+
+emm_old <- emmeans(mod_rna_old, ~ time | allocation) %>% 
+  as.data.frame()
+saveRDS(emm_old, "./data/data-gen/emm_rna_con.rds")
+
+
+### Contrasts for the time interaction
+emmeans(mod_rna_old, ~ time) %>% 
+  contrast("pairwise") %>% 
+  summary(infer = TRUE)
+
+### The results
+
+# pre→post: β = 0.330, p = .028 (~39% increase, e^0.330 ≈ 1.39)
+# w3→post: β = 0.366, p = .013 (~44% increase)
+# pre→w3: ns (p = .942)
+
+
+
+```
+
+
+Summary of the RNA analysis:
+
+- Plate normalisation done and pipeline rebuilt with conc_norm
+- Intervention model: significant Time and Age × Time effects — old group drives a late-phase RNA increase (pre→post and w3→post), young group flat throughout
+- Old group model: Time significant but Allocation × Time not — both limbs increase similarly, suggesting a systemic rather than local response
+
+- Plot done
+
+- Pending items still on the list from last session:
+
+- Lab checks Monday: samples 328/329 (3076 R w3), and potential re-runs for 3031 L pre and 3037 L post
+
+- Pattern not as expected at all, warrants a check of all the spreadsheets to exclude any silly typos and such
+
+
+-->
+
+
+
+
+
+
+
+
+

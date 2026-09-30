@@ -1,0 +1,833 @@
+---
+title: "Bodycomp Analysis"
+format: html
+editor_options: 
+  chunk_output_type: console
+---
+
+
+```{r, setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+
+```
+
+
+## Relief muscle mass analysis
+
+This qmd is made with the purpose of analysing the muscle mass data, with the following question in mind:
+1. Is there a difference between age and/or condition?
+2. Does age influence the effect of the condition?
+
+**Primary outcomes**
+- Muscle volume from MRI (legs) - baseline and post
+- Muscle thickness from US (legs) - baseline, mid, post
+
+**Secondary outcomes**
+- Upper-body lean body mass from DXA - baseline, mid, post
+
+**The flow of these analyses:**
+- All packages and data are loaded in the "packages & data" chunk. All data is formatted for modelling there.
+- Each outcome is treated separately (i.e. muscle volume, -thickness, upper body lean mass)
+- For each outcome, you'll find the code chunk with the model, emmeans and contrasts (constrasts were ran only if necessary), then you'll find the results reported below the chunk.
+- Comparisons between the young and old intervention group has a model per outcome, as do the comparison between old intervention and control.
+
+
+
+### Data import and check 
+
+The code chunk below imports all the needed data from the relief package. It also checks that the dataframes are sensible, i.e., contains the expected data, filters out NA values, and sets it up for the models.
+
+```{r, packages and data}
+
+# Packages
+library(lme4); library(lmerTest); library(emmeans); library(tidyverse); library(ggrepel)
+
+
+# Data
+
+mr.dat <- reliefdata::relief_mr %>% 
+  mutate(participant = as.character(participant))
+
+us.dat <- reliefdata::relief_thickness
+
+condition <- reliefdata::relief_volume %>%
+  mutate(participant = as.character(participant))
+
+participants <- reliefdata::relief_participants %>%
+  mutate(age_group = if_else(age < 40, "yng", "old"))
+  
+body_comp <- reliefdata::relief_bodycomp
+
+
+# Data wrangling
+
+mr.dat <- mr.dat %>%
+  full_join(condition) %>%
+  select(-arm) %>% 
+  full_join(participants)
+
+us.dat <- us.dat %>%
+  full_join(condition) %>%
+  select(-arm) %>%
+  full_join(participants)
+
+
+bodycomp.dat <- body_comp %>%
+  select(participant, age, time, height, 
+         lean.right_upperbody, lean.left_upperbody,
+         lean.right_arm, lean.left_arm, lean.arms,
+         lean.right_leg, lean.left_leg, lean.legs,
+         lean.whole, weight.whole) %>% 
+  
+  # label participants with control or intervention according to grp allocation, and young/old age groups (group)
+  mutate(allocation = if_else(participant %in% c("3071", "3075", "3076", "3083",
+                                                 "3084", "3085", "3086", "3090",
+                                                 "3091", "3094"), "con", "int", participant),
+          
+         age = as.character(age),
+         group = if_else(age > "65",
+                         "old",
+                         if_else(age < "65",
+                                 "yng", age)),
+         condition = if_else(allocation == "con" & group == "old",
+                             "old.con",
+                             if_else(allocation == "int" & group == "old",
+                                     "old.int",
+                                     if_else(allocation == "int" & group == "yng",
+                                             "yng.int", allocation)))) %>%
+  
+  # convert g to kg
+  mutate(lbmkg = lean.whole/1000,
+         bmkg = weight.whole,
+         right_arm_kg = lean.right_arm/1000,
+         left_arm_kg = lean.left_arm/1000,
+         right_upper_kg = lean.right_upperbody/1000,
+         left_upper_kg = lean.left_upperbody/1000,
+         arms_kg = lean.arms/1000,
+         right_leg_kg = lean.right_leg/1000,
+         left_leg_kg = lean.left_leg/1000,
+         legs_kg = lean.legs/1000) %>% 
+  
+  
+  pivot_longer(names_to = "variable",
+               values_to = "kg",
+               cols = c(lbmkg, bmkg, right_upper_kg, left_upper_kg, right_arm_kg, left_arm_kg, arms_kg,
+                        right_leg_kg, left_leg_kg, legs_kg)) %>%
+  filter(!participant %in% c("3004", "3005", "3010", "3019",
+                             "3020", "3022", "3026", "3034",
+                             "3035", "3046", "3069", "3033",
+                             "3053", "3068")) %>%
+  select(participant, time, allocation = condition, age_group = group, height, variable, kg)
+
+
+bodycomp.dat <- bodycomp.dat %>%
+  mutate(
+    allocation = case_when(
+      allocation == "yng.int" ~ "int",
+      allocation == "old.int" ~ "int",
+      allocation == "old.con" ~ "con",
+      TRUE ~ allocation
+    )
+  ) %>%
+  filter(variable %in% c("right_upper_kg", "left_upper_kg")) %>%
+  mutate(side = ifelse(variable == "right_upper_kg", "right", "left"))
+
+# Join the randomization key
+
+condition_arm <- condition %>%
+  mutate(side = ifelse(arm == "R", "right", "left")) %>%
+  select(participant, condition, side)
+
+lean.dat <- bodycomp.dat %>%
+  left_join(condition_arm, by = c("participant", "side")) %>%
+  mutate(condition = ifelse(allocation == "con", "none", condition))
+
+saveRDS(lean.dat, "./data/data-gen/lean_dat.rds")
+
+# Check data structure
+#str(mr.dat)
+#head(mr.dat)
+#summary(mr.dat)
+
+#str(us.dat)
+#head(us.dat)
+#summary(us.dat)
+
+## Check for missing values
+# need to filter out the measurements marked as "both" condition, seems like 
+# the masters students didnt make those measurements
+
+
+mr.clean <- mr.dat %>%
+  filter(!leg == "both",
+         !participant %in% c("3070", "3092", "3093", "3069", #These are all missing 
+                             "3068", "3056", "3053", "3046", #measurements
+                             "3045", "3035", "3034", "3033", 
+                             "3028", "3026", "3025", "3022", 
+                             "3021", "3020", "3019", "3017", 
+                             "3005", "3004")) %>%
+  mutate(age_group = factor(age_group, levels = c("yng", "old")),
+         condition = factor(condition, levels = c("low", "mod")),
+         time = factor(time, levels = c("pre", "post")),
+         allocation = factor(allocation, levels = c("int", "con")),
+         condition = case_when(participant %in% c("3071", "3075", "3076",
+                                                  "3083", "3084", "3085",
+                                                  "3086", "3090", "3091",
+                                                  "3094") ~ "none", TRUE ~ condition))
+
+muscle_volume <- mr.clean %>%
+  filter(compartment == "muscle") 
+
+saveRDS(muscle_volume, "./data/data-gen/muscle_volume.RDS")
+
+#colSums(is.na(mr.clean)) 
+
+# No NAs after filtering, but some of these are only missing
+# e.g. post measurements - worth keeping baseline somehow?
+# 3004, 3005, 3019, 3026, 3033, 3034, 3046, 3053, 3069,
+# and 3093 dropped out due to different reasons (health/time
+# issues primarily). 3017 and 3092 had too few RT sessions (<20) 
+# and is thus excluded. 3020, 3021, 3022, 3025, 3028, 
+# and 3056 had incomplete analyses (the data was either 
+# not on the CD or only arms). 3035, 3045, 3068, and 3070 
+# missed their appointment for measurement and rescheduling 
+# was not possible.
+
+
+us.dat2 <- us.dat %>% 
+  filter(!participant %in% c("3046", "3033")) # These two dropped out
+
+# 3.1 Create composite muscle thickness (VL + VI average)
+comp.dat <- us.dat2 %>%
+  mutate(
+    composite_thickness = (VLthick + VIthick) / 2
+  )
+
+# 3.2 Create limb-specific baseline values
+# These will be constant for each leg (Volume condition) within each person
+composite.dat <- comp.dat %>%
+  group_by(participant, condition) %>%
+  mutate(
+    # Baseline values for muscle thickness
+    baseline_VL = mean(VLthick[time == "pre"]),
+    baseline_VI = mean(VIthick[time == "pre"]),
+    baseline_composite = mean(composite_thickness[time == "pre"])) %>%
+  ungroup()
+
+# 3.3 Ensure proper factor coding with correct reference levels
+muscle_thickness <- composite.dat %>%
+  mutate(
+    age_grp = factor(age.grp, levels = c("yng", "old")),
+    condition = factor(condition, levels = c("low", "mod")),
+    time = factor(time, levels = c("pre", "mid", "post")),
+    allocation = factor(allocation, levels = c("int", "con")),
+         condition = case_when(participant %in% c("3071", "3075", "3076",
+                                                  "3083", "3084", "3085",
+                                                  "3086", "3090", "3091",
+                                                  "3094") ~ "none", TRUE ~ condition)) %>%
+  group_by(participant, leg, time, age_grp, height, weight, allocation, condition) %>%
+  summarise(thickness = mean(composite_thickness, na.rm = TRUE))
+
+saveRDS(muscle_thickness, "./data/data-gen/muscle_thickness.rds")
+
+#colSums(is.na(us.clean))
+
+
+
+
+```
+
+### General comments on these models
+
+The core analytical models used are mixed effects models with age X condtion X time as fixed effects and subject-level random intercepts, essentially asking for instance does young and old adults respond differently to low vs. moderate training volume. 
+
+The lmer package used here fits a linear mixed effects model, an extension of regular linear regression, that handles repeated measures and nested data. The term "mixed" stems from having fixed (what we're directly interested in testing) and random effects (sources of clustering or dependence in our data that we want to account for). The interactions between fixed effects are compared as below:
+
+- Main effects: age_group, condition, time
+- Two-way: age_group:condition, age_group:time, condition:time
+- Three-way: age_group:condition:time
+
+Here we use both participant as a random intercept (random effects). Participant is added to account for the fact that measurements are nested within individuals, and adding "1 |" means that we're fitting a random intercept, allowing each participant to have their own baseline level of corrected area, to absorb the individual difference that could otherwise inflate the residual error. Other models will have "1 | participant/leg", which means that "leg" is nested within participant - this is simply to account for our within-participant design. "/leg" is however dropped in cases where it returns "isSingular", which means that the there is not enough information to separate leg-level variance from participant-level variance, or that the leg-level variance is not greater than the participant-level variance, rendering it useless.
+
+So, with both fixed and random effects, the model is asking: after accounting for the fact that repeated measurements on the same person are correlated, what are the fixed effects of age group, condition, and time on muscle volume? Then we use an anova to get an output with F-tests for each of those terms, emmeans and contrasts where it is appropriate.
+
+The emmeans packages lets us exctract the estimated marginal means, which is the model's best estimate of the group mean at each combination of the factors we put into the model (e.g., old adults, moderate volume, post intervention), averaged appropriately over the other variables. This is simply easier to interpret than the large table of coefficients from the model, which is expressed as relative to a reference category (e.g., young adults at baselin in the low-volume condition). In plain language, emmeans lets us easily intepret the specific group means.
+
+Since the omnibus ANOVA terms (F-tests) "only" tells us whether a factor or interaction significant overall, we need more unpacking to tell us where the differences actually lie. For instance you might find a significant Age X Time interaction, i.e. young and old did change differently over time. However, you will not be able to distinguish by how much, at which timepoint (if multiple) etc. This is where contrasts comes in, which helps us ask targeted questions to the model, for instance, did young and old adults differ in their pre-to-post change, was there a difference between low and moderate volume at post, how much did muscle volume change etc., actually quantifying the Age X Time effect rather than "just" knowing its significant
+
+Compared to e.g., post-hoc test like Tukey correction across all pairwise comparisons, the contrasts are hypothesis-driven - we specify exactly which comparison matter for our research questions, which seems more scientifically meaningful. We're not fishing, but testing pre-specified questions that flow directly from our design. 
+
+### Modelling muscle volume
+
+The code chunks below contains the models for analysing muscle volume at baseline and post. The data itself is described in the "reliefdata" package, but briefly, we are using the cm3 values derived from the slicer software. 
+
+
+#### Model 1: Muscle volume young/old intervention
+
+This first model compares the young and old intervention groups.
+
+```{r, model 1}
+
+#--- Model ---------------------------------------------------------------------
+
+# Since we only have a controle group (condition = none) for the old participant, we exclude that group in this model to prevent rank deficiency in the model.
+
+mu_volume <- muscle_volume %>%
+  filter(condition != "none")
+
+mod_vol <- lmer(volume ~ age_group * condition * time + (1 | participant),
+                data = mu_volume)
+
+summary(mod_vol)
+anova(mod_vol)
+
+# So the plan was to run (1 | participant/leg) here, but this gives the "boundary (singular) fit: see help('isSingular')" error message, possibly pointing towards not enough information to separate leg-level variance from participant-level variance, thus collapsing the leg-level random effect to zero. Since the condition is already indexed by leg this might be fine, the leg-level structure is partially captured in the fixed effects, so maybe we do not need an additional random term for it.  
+
+
+#--- Emmeans -------------------------------------------------------------------
+
+# emmeans output
+
+emm_vol <- emmeans(mod_vol, ~ age_group * condition * time)
+emm_vol
+
+#--- Contrasts -----------------------------------------------------------------
+
+# Contrast 1: Pre-to-post change within each age x condition
+emm_vol %>%
+  contrast("pairwise", by = c("age_group", "condition")) %>%
+  summary(infer = TRUE, adjust = "none")
+
+
+# Contrast 2: Low vs. mod at each timepoint, within each age group
+
+emm_vol %>%
+  contrast("pairwise", by = c("age_group", "time")) %>%
+  summary(infer = TRUE, adjust = "none")
+
+## Contrast 3: Young vs. old at each timepoint:
+
+emm_vol %>%
+  emmeans(~ age_group | time) %>%
+  contrast("pairwise") %>%
+  summary(infer = TRUE)
+
+# Contrast 4: Low vs. mod between young and old at each time
+
+emm_vol %>%
+  emmeans(~ condition * age_group | time) %>%
+  contrast(interaction = c("pairwise", "pairwise")) %>%
+  summary(infer = TRUE, adjust = "none")
+
+
+
+```
+
+**Results summary model 1: Muscle volume in young intervention vs. old intervention**
+
+Fixed effects (ANOVA):
+- Time:                F(1, 139.1) = 66.83, p < .001
+- Age group:           F(1, 47.0)  = 0.76,  p = .387
+- Condition:           F(1, 139.0) = 0.10,  p = .754
+- Age × Condition:     F(1, 139.0) = 2.14,  p = .146
+- Age × Time:          F(1, 139.1) = 11.29, p = .001
+- Condition × Time:    F(1, 139.0) = 2.31,  p = .131
+- Age × Cond × Time:   F(1, 139.0) = 0.09,  p = .766
+
+Subgroup pre→post change (emmeans, 95% CI):
+- Young, Low: +161 cm³ [95, 228],   p < .001
+- Young, Mod: +221 cm³ [155, 288],  p < .001
+- Old, Low:   +60 cm³  [-4, 124],   p = .068
+- Old, Mod:   +100 cm³ [36, 164],   p = .003
+
+Condition contrast — Low vs. Mod within age group (post):
+- Young: -59 cm³ [-126, 8],   p = .082
+- Old:   -1 cm³  [-65, 63],   p = .971
+
+Age contrast — Young vs. Old pooled across conditions:
+- Pre:  +73 cm³  [-225, 371], p = .625
+- Post: +184 cm³ [-114, 482], p = .220
+
+Bottom line: Strong time effect driven by young adults. Older adults gained significantly less regardless of condition (Age × Time, p = .001). No dose-response. Old, Low CI crosses zero, consistent with p = .068.
+
+#### Model 2: Muscle volume old intervention/control
+
+This next model (2) compares old intervention and old control. 
+
+```{r, model 2}
+
+#--- Model ---------------------------------------------------------------------
+
+# Due to the findings from the old int + old con, Im also adding a model comparing without the condition as a fixed effect, to see if pooling the training groups may ameliorate the baseline imbalances. This gives a "cleaner" model simply comparing trained to untrained pre -> post. 
+
+control_volume <- muscle_volume %>%
+  filter(age_group != "yng")
+
+control_volume_bin <- control_volume %>%
+  mutate(trained = ifelse(condition == "none", "con", "int"))
+
+mod_vol_bin <- lmer(volume ~ trained * time + (1 | participant),
+                       data = control_volume_bin)
+
+summary(mod_vol_bin)
+anova(mod_vol_bin)
+
+#--- Emmeans -------------------------------------------------------------------
+
+# emmeans output
+emm_vol_bin <- emmeans(mod_vol_bin, ~ trained * time)
+emm_vol_bin
+
+#--- Contrasts -----------------------------------------------------------------
+
+# Contrast 1: Intervention vs. control at each timepoint
+emm_vol_bin %>%
+  contrast("pairwise", by = "time") %>%
+  summary(infer = TRUE, adjust = "none")
+
+# Contrast 2: Pre-to-post change within intervention and control
+
+emm_vol_bin %>%
+  contrast("pairwise", by = "trained") %>%
+  summary(infer = TRUE, adjust = "none")
+
+
+
+```
+
+**Result summary model 2: Old intervention vs. old control**
+
+Muscle Volume — Control model (mod_vol_bin)
+
+Fixed effects (ANOVA):
+- Trained:        F(1, 33.0) = 7.33, p = .011
+- Time:           F(1, 103.0) = 3.03, p = .085
+- Trained × Time: F(1, 103.0) = 4.72, p = .032
+
+Pre→post change within group (emmeans, 95% CI):
+- Control: -9 cm³  [-78, 60],  p = .799
+- Trained: +80 cm³ [37, 123],  p < .001
+
+Trained vs. control at each timepoint:
+- Pre:  Int > Con by 401 cm³ [64, 737],   p = .021
+- Post: Int > Con by 489 cm³ [153, 826],  p = .006
+
+Bottom line: Trained older adults increased volume pre→post; controls did not. Trained × Time interaction significant (p = .032), but the baseline imbalance (trained already larger at pre, p = .021) complicates interpretation — this reflects pre-existing group differences, not a training-specific effect.
+
+
+### Modelling muscle thickness
+
+The code chunks below contains the model for analysing muscle thickness at baseline, mid and post. The data itself is described in the "reliefdata" package, but briefly, we are using the mm values derived from the Fuji software. The models follows the same logic as muscle volume. 
+
+#### Model 3: Muscle thickness young/old intervention
+
+This model (3) compares young and old intervention groups in terms of a composite of the vastus lateralis and intermedius. 
+
+```{r, model 3}
+
+#--- Model ---------------------------------------------------------------------
+
+# For muscle thickness we have more data (due to an additional time point), so using participant/leg for the random intercept does work here. We could also drop it here for consistency reasons, but it could also be a sort of validation of our data - it could mean that there genuinely is meaningful leg-level clustering in the thickness measurements that the model can detect and account for. 
+
+mu_thickness <- muscle_thickness %>%
+  filter(condition != "none")
+
+mod_thick <- lmer(thickness ~ age_grp * condition * time + (1 | participant/leg),
+                  data = mu_thickness)
+
+mod_thick_sum <- summary(mod_thick)
+mod_thick_sum
+mod_thick_anova <- anova(mod_thick)
+mod_thick_anova
+
+#--- Emmeans -------------------------------------------------------------------
+
+# emmeans output
+emm_thickness <- emmeans(mod_thick, ~ age_grp * condition * time)
+
+#--- Contrasts -----------------------------------------------------------------
+
+## Contrast 1: Pre -> mid -> post changes within each age x condition
+# This will show for instance whether young-low changed significantly from pre-mid, pre-post, mid-post etc.
+emm_thickness %>%
+  contrast("pairwise", by = c("age_grp", "condition")) %>%
+  summary(infer = TRUE, adjust = "none") 
+
+
+## Contrast 2: Low vs. mod at each time point, within each age group
+# This is the dose-response question - did low and mod differ at pre, mid or post within young and old separately?
+emm_thickness %>%
+  contrast("pairwise", by = c("age_grp", "time")) %>%
+  summary(infer = TRUE, adjust = "none")
+
+
+# Contrast 3: Young vs. old at each timepoint (pooling across conditions)
+# This tells us whether young and old differed at all at the separate timepoints, regardless of condition
+emm_thickness %>%
+  emmeans(~ age_grp | time) %>%
+  contrast("pairwise") %>%
+  summary(infer = TRUE)
+# This produces a NOTE: "Results may be misleading due to involvement in interactions", which might be emmeans being cautious by flagging that age_grp is part of an interaction term in the model, so marginal means averaged over condition should be interpreted carefully. Since we're using it descriptively to characterize the age difference and not a primary inferential claim, this should be fine. 
+
+
+# Contrast 4: Low vs. mod between young and old at each time
+emm_thickness %>%
+  emmeans(~ condition * age_grp | time) %>%
+  contrast(interaction = c("pairwise", "pairwise")) %>%
+  summary(infer = TRUE, adjust = "none")
+
+
+```
+
+**Result summary model 3: Muscle thickness in young/old intervention**
+
+Muscle Thickness — Intervention model (mod_thick)
+
+Fixed effects (ANOVA):
+- Age group:           F(1, 67.3)  = 23.21, p < .001
+- Condition:           F(1, 70.2)  = 2.14,  p = .148
+- Time:                F(2, 215.0) = 33.14, p < .001
+- Age × Condition:     F(1, 70.2)  = 1.55,  p = .217
+- Age × Time:          F(2, 215.0) = 5.39,  p = .005
+- Condition × Time:    F(2, 226.8) = 2.68,  p = .071
+- Age × Cond × Time:   F(2, 226.8) = 0.03,  p = .970
+
+Subgroup changes (emmeans, 95% CI):
+
+Young, Low:
+- Pre→Mid:  +0.91 mm [0.39, 1.43],  p = .001
+- Pre→Post: +1.21 mm [0.67, 1.76],  p < .001
+- Mid→Post: +0.30 mm [-0.25, 0.86], p = .279
+Young, Mod:
+- Pre→Mid:  +1.25 mm [0.73, 1.77],  p < .001
+- Pre→Post: +1.76 mm [1.22, 2.31],  p < .001
+- Mid→Post: +0.51 mm [-0.04, 1.06], p = .070
+Old, Low:
+- Pre→Mid:  +0.32 mm [-0.18, 0.81], p = .213
+- Pre→Post: +0.28 mm [-0.25, 0.80], p = .298
+- Mid→Post: -0.04 mm [-0.54, 0.47], p = .880
+Old, Mod:
+- Pre→Mid:  +0.78 mm [0.28, 1.27],  p = .002
+- Pre→Post: +0.93 mm [0.40, 1.45],  p = .001
+- Mid→Post: +0.15 mm [-0.35, 0.65], p = .557
+
+Condition contrast — Low vs. Mod within age group:
+- Young, Post: -0.73 mm [-1.43, -0.02], p = .044
+- Old, Post:   -0.32 mm [-0.96, 0.33],  p = .332
+
+Age contrast — Young vs. Old pooled across conditions:
+- Pre:  +3.62 mm [1.90, 5.33], p < .001
+- Mid:  +4.15 mm [2.43, 5.87], p < .001
+- Post: +4.50 mm [2.78, 6.23], p < .001
+
+Bottom line: Young adults gained thickness at both timepoints across both conditions. Old adults gained meaningfully only in Mod condition. Age × Time significant (p = .005). Marginal condition × time (p = .071) driven by young post difference. No dose-response interaction with age. Age gap widens slightly post but CIs on interaction contrasts all cross zero.
+
+Of note: The muscle thickness Young, Post Low vs. Mod contrast is the only hint of a dose-response anywhere in the hypertrophy data (p = .044), but it's marginal and not supported by the Condition × Time F-test (p = .071). Don't overinterpret it.
+
+#### Model 4: Muscle thickness old intervention/control
+
+This model (4) compares old participants in the intervention and the control group in terms of a composite of vastus lateralis and -intermedius thickness.
+
+```{r, model 4}
+
+#--- Model ---------------------------------------------------------------------
+
+control_thickness <- muscle_thickness %>%
+  filter(age_grp != "yng")
+
+control_thickness_bin <- control_thickness %>%
+  mutate(trained = ifelse(condition == "none", "con", "int"))
+
+mod_thick_bin <- lmer(thickness~ trained * time + (1 | participant/leg),
+                       data = control_thickness_bin)
+
+mod_thick_bin_sum <- summary(mod_thick_bin)
+mod_thick_bin_sum
+mod_thick_bin_anova <- anova(mod_thick_bin)
+mod_thick_bin_anova
+
+#--- Emmeans -------------------------------------------------------------------
+
+# emmeans output
+emm_thickness_bin <- emmeans(mod_thick_bin, ~ trained * time)
+
+#--- Contrasts -----------------------------------------------------------------
+
+# Contrast 1: Trained vs. control at each timepoint
+emm_thickness_bin %>%
+  contrast("pairwise", by = "time") %>%
+  summary(infer = TRUE, adjust = "none")
+
+
+# Contrast 2: Pre-to-post change within trained and control
+emm_thickness_bin %>%
+  contrast("pairwise", by = "trained") %>%
+  summary(infer = TRUE, adjust = "none")
+
+
+```
+
+**Result summary model 4: Muscle thickness in old intervention/control**
+
+Muscle Thickness — Control model (mod_thick_bin)
+Fixed effects (ANOVA):
+- Trained:        F(1, 45.9) = 0.28, p = .599
+- Time:           F(2, 151.9) = 3.42, p = .035
+- Trained × Time: F(2, 151.9) = 0.64, p = .529
+
+Pre→post change within group (emmeans, 95% CI):
+- Control: Pre→Mid  +0.18 mm [-0.79, 0.42], p = .547
+           Pre→Post +0.27 mm [-0.34, 0.87],  p = .383
+- Trained: Pre→Mid  +0.55 mm [0.21, 0.88],  p = .002
+           Pre→Post +0.60 mm [0.25, 0.95],   p = .001
+
+Trained vs. control at each timepoint:
+- Pre:  -0.43 mm [-3.00, 2.13], p = .735
+- Mid:  -0.80 mm [-3.35, 1.76], p = .535
+- Post: -0.77 mm [-3.33, 1.79], p = .549
+
+Bottom line: Trained older adults increased thickness pre→mid and pre→post; controls did not change. However, Trained × Time non-significant (p = .529) and groups did not differ at any timepoint. No baseline imbalance concern here unlike muscle volume.
+
+### Modelling lean mass in the upper body
+
+The code chunks below contains the model for analysing lean mass in the upper body by left and right side (corresponding to low or mod volume) at baseline, mid and post. The data itself is described in the "reliefdata" package, but briefly, we are using the kg values derived from the DXA software. The models follow the same logic as muscle volume. 
+
+#### Model 5: Upper-body lean mass young/old intervention
+
+```{r, model 5}
+
+#--- Model ---------------------------------------------------------------------
+
+lean_dat_filtered <- lean.dat %>%
+  filter(condition != "none")
+
+# This is for absolute/percentage change
+lean_dat_filtered %>%
+  group_by(age_group, condition) %>%
+  filter(time %in% c("pre", "post")) %>%
+  select(participant, age_group, condition, time, kg) %>%
+  pivot_wider(names_from = time, values_from = kg) %>%
+  mutate(
+    delta = post - pre,
+    pct_change = (delta / pre) * 100
+  ) %>%
+  group_by(age_group, condition) %>%
+  summarise(
+    mean_delta = mean(delta, na.rm = TRUE),
+    sd_delta = sd(delta, na.rm = TRUE),
+    mean_pct = mean(pct_change, na.rm = TRUE),
+    sd_pct = sd(pct_change, na.rm = TRUE)
+  )
+
+
+mod_upperbody <- lmer(kg ~ age_group * condition * time + (1 | participant),
+                data = lean_dat_filtered)
+
+summary(mod_upperbody)
+anova(mod_upperbody)
+
+#--- Emmeans -------------------------------------------------------------------
+
+emm_upperbody <- emmeans(mod_upperbody, ~ age_group * condition * time)
+emm_upperbody
+
+#--- Contrasts -----------------------------------------------------------------
+
+# Contrast 1: Pre→mid→post change within each age × condition cell
+emm_upperbody %>%
+  contrast("pairwise", by = c("age_group", "condition")) %>%
+  summary(infer = TRUE, adjust = "none")
+
+
+# Contrast 2: Low vs. mod at each timepoint within each age group
+emm_upperbody %>%
+  contrast("pairwise", by = c("age_group", "time")) %>%
+  summary(infer = TRUE, adjust = "none")
+
+
+# Contrast 3: Young vs. old at each timepoint
+emm_upperbody %>%
+  emmeans(~ age_group | time) %>%
+  contrast("pairwise") %>%
+  summary(infer = TRUE)
+
+
+# Contrast 4: Low vs. mod between young and old at each time
+emm_upperbody %>%
+  emmeans(~ condition * age_group | time) %>%
+  contrast(interaction = c("pairwise", "pairwise")) %>%
+  summary(infer = TRUE, adjust = "none")
+
+
+```
+
+**Result summary model 5: Upper-body lean mass young/old intervention**
+
+Fixed effects (ANOVA):
+- Age group:           F(1, 53.0)  = 1.59,  p = .212
+- Condition:           F(1, 263.0) = 12.75, p < .001
+- Time:                F(2, 263.0) = 7.15,  p = .001
+- Age × Condition:     F(1, 263.0) = 0.31,  p = .575
+- Age × Time:          F(2, 263.0) = 1.17,  p = .311
+- Condition × Time:    F(2, 263.0) = 0.02,  p = .980
+- Age × Cond × Time:   F(2, 263.0) = 0.01,  p = .989
+
+Subgroup pre→post change (emmeans, 95% CI):
+- Young, Low: +0.37 kg [0.09, 0.64],   p = .009
+- Young, Mod: +0.33 kg [0.06, 0.60],   p = .019
+- Old, Low:   +0.15 kg [-0.10, 0.40],  p = .235
+- Old, Mod:   +0.14 kg [-0.11, 0.39],  p = .274
+
+Condition contrast — Low vs. Mod within age group (pre):
+- Young: -0.25 kg [-0.53, 0.02], p = .072
+- Old:   -0.17 kg [-0.42, 0.08], p = .187
+
+Age contrast — Old vs. Young pooled across conditions:
+- Pre:  +0.89 kg [-0.36, 2.13], p = .160
+- Post: +0.68 kg [-0.57, 1.93], p = .278
+
+Bottom line: Significant condition main effect (p < .001) and time effect (p = .001), but no Age × Time, no Condition × Time, and no interaction of any kind. The condition main effect reflects a baseline imbalance — mod participants are consistently heavier across all timepoints including pre, not a training response. Young adults showed significant pre→post gains; old adults did not, but Age × Time non-significant so this distinction is not statistically supported.
+
+Of note: The upper-body lean mass condition main effect (p < .001) is almost certainly the baseline imbalance you already identified — mod participants consistently heavier at every timepoint.
+
+#### Model 6: Upper-body lean mass old intervention/control
+
+```{r, model 6}
+
+#--- Model ---------------------------------------------------------------------
+
+lean_dat_old <- lean.dat %>%
+  filter(age_group == "old") %>%
+  mutate(trained = ifelse(condition == "none", "con", "int"))
+
+# This is only for absolute/percentage values
+lean_dat_old %>%
+  filter(time %in% c("pre", "post")) %>%
+  group_by(participant, trained, time) %>%
+  summarise(kg = mean(kg, na.rm = TRUE), .groups = "drop") %>%
+  pivot_wider(names_from = time, values_from = kg) %>%
+  mutate(
+    delta = post - pre,
+    pct_change = (delta / pre) * 100
+  ) %>%
+  group_by(trained) %>%
+  summarise(
+    mean_delta = mean(delta, na.rm = TRUE),
+    sd_delta = sd(delta, na.rm = TRUE),
+    mean_pct = mean(pct_change, na.rm = TRUE),
+    sd_pct = sd(pct_change, na.rm = TRUE)
+  )
+
+mod_upperbody_bin <- lmer(kg ~ trained * time + (1 | participant),
+                    data = lean_dat_old)
+
+summary(mod_upperbody_bin)
+anova(mod_upperbody_bin)
+
+#--- Emmeans -------------------------------------------------------------------
+
+emm_upperbody_bin <- emmeans(mod_upperbody_bin, ~ trained * time)
+emm_upperbody_bin
+
+#--- Contrasts -----------------------------------------------------------------
+
+# Contrast 1: Trained vs. control at each timepoint
+emm_upperbody_bin %>%
+  contrast("pairwise", by = "time") %>%
+  summary(infer = TRUE, adjust = "none")
+
+
+# Contrast 2: Pre→post change within trained and control
+emm_upperbody_bin %>%
+  contrast("pairwise", by = "trained") %>%
+  summary(infer = TRUE, adjust = "none")
+
+```
+
+**Result summary model 6: Upper-body lean mass old intervention/control**
+
+Upper-body Lean Mass — Control model (mod_upperbody_bin)
+Fixed effects (ANOVA):
+- Trained:        F(1, 38.0) = 2.19, p = .147
+- Time:           F(2, 194.1) = 1.54, p = .217
+- Trained × Time: F(2, 194.1) = 0.22, p = .807
+
+Pre→post change within group (emmeans, 95% CI):
+- Control: +0.08 kg [-0.22, 0.39], p = .588
+- Trained: +0.15 kg [-0.03, 0.32], p = .102
+
+Trained vs. control at each timepoint:
+- Pre:  Con < Int by 1.23 kg [-3.00, 0.54], p = .169
+- Mid:  Con < Int by 1.35 kg [-3.12, 0.43], p = .133
+- Post: Con < Int by 1.29 kg [-3.06, 0.48], p = .149
+
+Bottom line: No significant effects. Neither trained nor control older adults changed upper-body lean mass meaningfully. No baseline imbalance — groups did not differ at pre (p = .169). Flat across all timepoints in both groups.
+
+
+This last code chunk is for generating emmeans for figure 1.
+
+```{r, extracting emmeans for fig}
+
+emm_mv_df <- as.data.frame(emm_vol)
+emm_mt_df <- as.data.frame(emm_thickness)
+emm_ublm_df <- as.data.frame(emm_upperbody)
+
+str(emm_ublm_df)
+
+# Fixing inconsistencies before saving
+
+emm_ublm_df_fix <- emm_ublm_df %>% 
+  rename(age_grp = age_group) %>%
+  mutate(time = factor(time, levels = c("pre", "mid", "post")),
+         age_grp = factor(age_grp, levels = c("yng", "old")))
+
+emm_mv_df_fix <- emm_mv_df %>%
+  rename(age_grp = age_group) %>%
+  mutate(time = factor(time, levels = c("pre", "post")),
+         age_grp = factor(age_grp, levels = c("yng", "old")))
+
+emm_mt_df_fix <- emm_mt_df %>% 
+  mutate(time = factor(time, levels = c("pre", "mid", "post")),
+         age_grp = factor(age_grp, levels = c("yng", "old")))
+
+str(emm_ublm_df_fix)
+str(emm_mv_df_fix)
+str(emm_mt_df_fix)
+
+# Then save all three
+
+saveRDS(emm_mv_df_fix, "./data/data-gen/emm_mv.rds")
+saveRDS(emm_mt_df_fix, "./data/data-gen/emm_mt.rds")
+saveRDS(emm_ublm_df_fix, "./data/data-gen/emm_ublm.rds")
+
+list.files("./data/data-gen/", pattern = "\\.rds$")
+
+```
+
+
+## TODO
+
+- Daniel, you might want to look over these.
+- Use change scores instead? Thats what I did for the ribose paper.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

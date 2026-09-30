@@ -1,0 +1,161 @@
+% References for the RNA-seq and statistical analysis paragraphs.
+% Keys match the ones already used in the Quarto text where they exist.
+% New keys: rcore2025, stan, carpenter2017, benjamini1995, edger4, cleveland1992
+
+@Manual{rcore2025,
+  title        = {R: A Language and Environment for Statistical Computing},
+  author       = {{R Core Team}},
+  organization = {R Foundation for Statistical Computing},
+  address      = {Vienna, Austria},
+  year         = {2025},
+  note         = {Version 4.5.1},
+  url          = {https://www.R-project.org/}
+}
+
+@Article{brms,
+  title   = {{brms}: An {R} Package for {Bayesian} Multilevel Models Using {Stan}},
+  author  = {Paul-Christian B{\"u}rkner},
+  journal = {Journal of Statistical Software},
+  year    = {2017},
+  volume  = {80},
+  number  = {1},
+  pages   = {1--28},
+  doi     = {10.18637/jss.v080.i01}
+}
+
+@Article{carpenter2017,
+  title   = {{Stan}: A Probabilistic Programming Language},
+  author  = {Bob Carpenter and Andrew Gelman and Matthew D. Hoffman and Daniel Lee and Ben Goodrich and Michael Betancourt and Marcus Brubaker and Jiqiang Guo and Peter Li and Allen Riddell},
+  journal = {Journal of Statistical Software},
+  year    = {2017},
+  volume  = {76},
+  number  = {1},
+  pages   = {1--32},
+  doi     = {10.18637/jss.v076.i01}
+}
+
+@Article{marginaleffects,
+  title   = {How to Interpret Statistical Models Using {marginaleffects} for {R} and {Python}},
+  author  = {Vincent Arel-Bundock and Noah Greifer and Andrew Heiss},
+  journal = {Journal of Statistical Software},
+  year    = {2024},
+  volume  = {111},
+  number  = {9},
+  pages   = {1--32},
+  doi     = {10.18637/jss.v111.i09}
+}
+
+@Article{glmmmtb,
+  title   = {{glmmTMB} Balances Speed and Flexibility Among Packages for Zero-inflated Generalized Linear Mixed Modeling},
+  author  = {Mollie E. Brooks and Kasper Kristensen and Koen J. {van Benthem} and Arni Magnusson and Casper W. Berg and Anders Nielsen and Hans J. Skaug and Martin M{\"a}chler and Benjamin M. Bolker},
+  journal = {The R Journal},
+  year    = {2017},
+  volume  = {9},
+  number  = {2},
+  pages   = {378--400},
+  doi     = {10.32614/RJ-2017-066}
+}
+
+@Article{robinson2010,
+  title   = {A scaling normalization method for differential expression analysis of {RNA-seq} data},
+  author  = {Mark D. Robinson and Alicia Oshlack},
+  journal = {Genome Biology},
+  year    = {2010},
+  volume  = {11},
+  number  = {3},
+  pages   = {R25},
+  doi     = {10.1186/gb-2010-11-3-r25}
+}
+
+% Original edgeR paper
+@Article{edger,
+  title   = {{edgeR}: a {Bioconductor} package for differential expression analysis of digital gene expression data},
+  author  = {Mark D. Robinson and Davis J. McCarthy and Gordon K. Smyth},
+  journal = {Bioinformatics},
+  year    = {2010},
+  volume  = {26},
+  number  = {1},
+  pages   = {139--140},
+  doi     = {10.1093/bioinformatics/btp616}
+}
+
+% edgeR v4 paper (normLibSizes() used in the script is a v4 function)
+@Article{edger4,
+  title   = {{edgeR} v4: powerful differential analysis of sequencing data with expanded functionality and improved support for small counts and larger datasets},
+  author  = {Yunshun Chen and Lizhong Chen and Aaron T. L. Lun and Pedro L. Baldoni and Gordon K. Smyth},
+  journal = {Nucleic Acids Research},
+  year    = {2025},
+  volume  = {53},
+  number  = {2},
+  pages   = {gkaf018},
+  doi     = {10.1093/nar/gkaf018}
+}
+
+@Book{efron2010,
+  title     = {Large-Scale Inference: Empirical {Bayes} Methods for Estimation, Testing, and Prediction},
+  author    = {Bradley Efron},
+  publisher = {Cambridge University Press},
+  address   = {Cambridge},
+  year      = {2010},
+  series    = {Institute of Mathematical Statistics Monographs},
+  doi       = {10.1017/CBO9780511761362}
+}
+
+% CONFIRM WITH DANIEL: authors, year and venue of the seqwrap paper.
+% Title and data repository below are verified; the author list is not.
+@Misc{seqwrap,
+  title        = {seqwrap: an {R} package for flexible iterative fitting of high-dimensional data},
+  author       = {Daniel Hammarstr{\"o}m and others},
+  year         = {2026},
+  howpublished = {R package available on CRAN: https://CRAN.R-project.org/package=seqwrap},
+  note         = {Replication data: doi:10.18710/I7U71O}
+}
+
+@Article{xu2024a,
+  title   = {Using {clusterProfiler} to characterize multiomics data},
+  author  = {Shuangbin Xu and Erqiang Hu and Yantong Cai and Zijing Xie and Xiao Luo and Li Zhan and Wenli Tang and Qianwen Wang and Bingdong Liu and Rui Wang and Wenqin Xie and Tianzhi Wu and Liwei Xie and Guangchuang Yu},
+  journal = {Nature Protocols},
+  year    = {2024},
+  volume  = {19},
+  number  = {11},
+  pages   = {3292--3320},
+  doi     = {10.1038/s41596-024-01020-z}
+}
+
+@Article{benjamini1995,
+  title   = {Controlling the False Discovery Rate: A Practical and Powerful Approach to Multiple Testing},
+  author  = {Yoav Benjamini and Yosef Hochberg},
+  journal = {Journal of the Royal Statistical Society: Series B (Methodological)},
+  year    = {1995},
+  volume  = {57},
+  number  = {1},
+  pages   = {289--300},
+  doi     = {10.1111/j.2517-6161.1995.tb02031.x}
+}
+
+% Reference given by ?stats::loess, for the dispersion trend model
+@InCollection{cleveland1992,
+  title     = {Local regression models},
+  author    = {William S. Cleveland and Eric Grosse and William M. Shyu},
+  booktitle = {Statistical Models in {S}},
+  editor    = {John M. Chambers and Trevor J. Hastie},
+  publisher = {Wadsworth \& Brooks/Cole},
+  address   = {Pacific Grove, CA},
+  year      = {1992},
+  chapter   = {8}
+}
+
+@article{schindelin2012fiji,
+	title = {Fiji: an open-source platform for biological-image analysis},
+	volume = {9},
+	issn = {1548-7105},
+	url = {https://doi.org/10.1038/nmeth.2019},
+	doi = {10.1038/nmeth.2019},
+	language = {en},
+	number = {7},
+	journal = {Nature Methods},
+	author = {Schindelin, Johannes and Arganda-Carreras, Ignacio and Frise, Erwin and Kaynig, Verena and Longair, Mark and Pietzsch, Tobias and Preibisch, Stephan and Rueden, Curtis and Saalfeld, Stephan and Schmid, Benjamin and Tinevez, Jean-Yves and White, Daniel James and Hartenstein, Volker and Eliceiri, Kevin and Tomancak, Pavel and Cardona, Albert},
+	month = jun,
+	year = {2012},
+	pages = {676--682},
+}

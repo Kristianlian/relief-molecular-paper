@@ -1,0 +1,955 @@
+---
+title: "Analysis of Oral Glucose Tolerance Test (OGTT) Data"
+editor_options: 
+  chunk_output_type: console
+---
+
+## Background
+
+OGTT data could be analyzed using a "reductionist" approach, in which the glucose values are summarized using a single value (e.g. the area under the curve). However, this likely throws away valuable data. Here we attempt to summarise the whole data set in a single model and compare groups across the whole 2 h period.
+
+## Packages and data
+
+To fit these models we need the `brms` package, use `citation("brms")` to cite it. We will use splines constructed with the `bs()` function from the `splines` package. We will also use the `marginaleffects` package for comparisons between groups/timepoints.
+
+```{r}
+#| echo: true
+#| warning: false
+#| message: false
+
+library(brms) # For fitting bayesian regression models
+library(splines) # For the bs() function
+library(tidyverse) # Data wrangling
+library(marginaleffects) # For comparisons between groups/timepoints
+library(reliefdata) # For the relief_glucose dataset
+
+```
+
+The data comes from the Relief study:
+
+```{r}
+
+reliefdata::relief_participants |>
+  mutate(allocation = if_else(age < 69, "yngint", allocation )) |> 
+  dplyr::select(participant, sex, allocation, age, height, weight) |> 
+  pivot_longer(cols = age:weight) |> 
+  summarise(.by = c(allocation,name, sex),
+            n = n(), 
+            m = mean(value), 
+            s = sd(value))
+
+
+```
+
+
+
+
+
+
+The first models will use only the pre-intervention data. Look trough each data set to see that they match what you would expect (number of participants, etc.). 
+
+```{r}
+
+# The comlete data 
+ogtt_dat <- reliefdata::relief_glucose %>%
+  group_by(participant, time) %>%
+  inner_join(relief_participants %>% mutate(participant = as.numeric(participant))) %>%
+  mutate(gruppe = paste(age.grp, allocation, sep = "_"),  
+         time = factor(time, levels = c("pre", "post")))  %>%
+
+  filter(!is.na(glucose)) %>%
+  ungroup() %>%
+  mutate(stglucose = scale(glucose), 
+         sampletime = if_else(is.na(sampletime), idealtime, sampletime )) %>%
+  select(participant, time, gruppe, sampletime, glucose, stglucose) %>%        
+  data.frame()
+
+# Pre-intervention data for preliminary models
+pre_dat <- filter(ogtt_dat, time == "pre")
+
+
+
+
+
+```
+
+
+## The model(s)
+
+The glucose to sample-time relationship can be modeled using a spline model. This allows for "wigglyness" in the glucose values over time. To work out suitable priors we will start with a simpler model.
+
+A bayesian model needs priors, these represent prior knowledge about the parameters that are to be estimeted in the model. We have a basic idea about what we expect from the data as we have seen similar data before. We also tronsform the glucose data to have a mean of 0 and a standard deviation of 1. This is done to make it easier to choose priors. 
+
+We want the model to expect a certain amount of curvature even before we see the data. We can do this by setting priors on the coefficients that control the curvature of the model. The curvature is created with splines. Splines let's us divide the time variable into smaller pieces where each pieac gets its own coefficient. The coefficient bends the resulting curve up or down. Each spline controls an area that overlaps with the next spline, this will create a continous smooth curve.
+
+We can visualize the splines by plotting them. 
+
+
+```{r}
+#| fig-cap: "The coefficient attached to the first spline (red line) will contribute most in the beginning of the sampletime variable, while the last spline (purple line) will contribute most at the end of the sampletime variable. The coefficient is multiplied with each spline to create the final curve."
+
+
+bs(pre_dat$sampletime, df = 4) %>%
+  as.data.frame() %>%
+  mutate(sampletime = pre_dat$sampletime) %>%
+  pivot_longer(cols = `1`:`4`, names_to = "x", values_to = "y") %>%
+    ggplot(aes(sampletime, y = y, group = x, color = x)) +
+  geom_line() +
+  labs(title = "Splines with 4 degrees of freedom", 
+       color = "Spline")
+```
+
+
+Using the `bs()` function we can create a spline with 4 degrees of freedom. This will create 4 splines that will be used to create the final curve. To fit these in a regression model we will use the `brms` package. The function `get_prior` will help us see what priors are needed for the model given a specific formula and data.
+
+
+```{r}
+
+get_prior(stglucose ~  1 + bs(sampletime, df = 4),
+          data = pre_dat, 
+          family = gaussian())
+
+
+```
+
+The intercept controls the starting point of the curve, this is likely below the grand mean of the data (after we have scaled it) See https://doi.org/10.1186/s12916-019-1440-4 for a large cohort. We use a normal distribution with a center around -1. and 1.5 standard deviations.
+
+The first and second spline should be positive and zero as we expect the curve to rise in the beginning. The third and fourth spline should be negative as we expect the curve to fall at the end. We will use normal distributions with different centers and a standard deviation of 1.5.
+
+Lastly the `sigma`parameter is the remaining variation in the model. This cannot be negative so we restrict it using an exponential distribution. 
+
+The full prior definition is below.
+
+```{r}
+
+
+prior1 <- c(prior(normal(-1, 1.5), class = Intercept),  
+               
+               prior(normal(1, 1.5), class = b, coef = "bssampletimedfEQ41"),
+               prior(normal(0.5, 1.5), class = b, coef = "bssampletimedfEQ42"),
+               prior(normal(-1, 1.5), class = b, coef = "bssampletimedfEQ43"),
+               prior(normal(-0.5, 1.5), class = b, coef = "bssampletimedfEQ44"),
+               # The prior for the residual variation
+               prior(exponential(1), class = sigma))
+
+
+```
+
+Next we fit a model that only samples from the prior. This is a "prior predictive simulation", we want to see what the model expects before we give it the data. The model object is stored as it takes some time to run these models.
+
+```{r}
+
+m1_pp <-  brm(stglucose ~  1 + bs(sampletime, df = 4),
+              prior = prior1, 
+             file = "fits/01-ogtt/m1_pp", # Save the model
+             sample_prior = "only", # Sample only from the prior
+             data = pre_dat, 
+             family = gaussian(),
+             iter = 2000, 
+             warmup = 1000, 
+             control = list(adapt_delta = 0.95))
+              
+```
+
+We can get predictions from the model using the `marginaleffects` package. This will give us the expected glucose values over time, not accounting for data coming from different individuals. We can compare these to prior data to see if the model is reasonable.
+
+```{r}
+#| fig-cap: "The prior predictive simulation shows the expected glucose values over time. The model expects a curve that rises in the beginning and falls at the end. Each line represents a 'draw' from the prior distribution with different parameters estimates. The model allows for many different scenarios at the same time restricting the model from implausible values."
+
+
+preds_prior <- predictions(m1_pp, newdata = data.frame(sampletime = seq(0, 150, 5)))
+
+posterior_draws(preds_prior) %>%
+  filter(drawid %in% 1:500) %>%
+  ggplot(aes(sampletime, draw, group = paste(drawid))) + 
+  geom_line(alpha = 0.1) + 
+
+  labs(title = "Prior predictive simulation",
+       x = "Sample time",
+       y = "Glucose (standardized)") 
+
+
+```
+
+Next we fit this model with data and create a posterior distribution. This is the weighted information contained in the data and the priors. The model gives us the most probable values for the parameters given the data and the priors. 
+
+As the model is already built, we can update it with data.
+
+```{r}
+
+m1 <- update(m1_pp, 
+             newdata = pre_dat, 
+             sample_prior = "no", # Sample from the posterior
+             file = "fits/01-ogtt/m1", 
+             iter = 2000, 
+             warmup = 1000, 
+             control = list(adapt_delta = 0.95))
+
+
+preds_post <- predictions(m1, newdata = data.frame(sampletime = seq(0, 150, 5)))
+
+
+posterior_draws(preds_post) %>%
+  filter(drawid %in% 1:500) %>%
+
+  ggplot(aes(sampletime, draw, group = paste0(drawid))) + 
+  
+  ## Overlay the prior the see that the data gives us more information
+  
+
+  
+  
+  geom_line(data = filter(posterior_draws(preds_prior), drawid %in% 1:500),
+            aes(sampletime, draw, group = paste0(drawid)),
+            alpha = 0.1, 
+            color = "purple") +
+  
+  geom_line(alpha = 0.1, color = "black") + 
+  
+  geom_point(data = pre_dat, 
+             aes(sampletime, stglucose, group = NULL), 
+                alpha = 1, shape = 21, size = 2) +
+  
+  labs(title = "Posterior predictive simulation (Global smooths)",
+       subtitle = "Posterior draws as lines, data as points, prior in purple",
+       x = "Sample time (min)",
+       y = "Glucose (Standardized units)") + 
+  theme_classic() 
+
+
+```
+
+
+Next we will add participant-level effects. We let each participant have their own curve. These curves will share information as they come from a multivariate distribution.
+
+Similarly as above, we check that we have all needed priors, we fit a model with the prior only, evaluate it and the fit the model with data.
+
+```{r}
+
+get_prior(stglucose ~  1 + bs(sampletime, df = 4) +
+            (1 + bs(sampletime, df = 4)|participant),
+          data = pre_dat, 
+          family = gaussian())
+
+prior2 <- c(
+              prior(normal(-1, 1.5), class = Intercept),  
+               
+               prior(normal(1, 1.5), class = b, coef = "bssampletimedfEQ41"),
+               prior(normal(0.5, 1.5), class = b, coef = "bssampletimedfEQ42"),
+               prior(normal(-1, 1.5), class = b, coef = "bssampletimedfEQ43"),
+               prior(normal(-0.5, 1.5), class = b, coef = "bssampletimedfEQ44"),
+               
+              # The prior for the correlations between participant level regression parameters
+               prior(lkj(1), class = cor),
+               # The wigglyness SD, wigglyness is sampled from a exponential distribution
+               prior(exponential(2), class = sd),
+               # The prior for the residual variation
+               prior(exponential(1), class = sigma)
+             ) 
+
+
+m2_pp <- brm(stglucose ~  1 + bs(sampletime, df = 4) +
+               (1 + bs(sampletime, df = 4)|participant),
+             # Priors (including comments)
+             prior = prior2,
+             file = "fits/01-ogtt/m2_pp", # Save the model
+             sample_prior = "only", # Sample only from the prior
+             data = pre_dat, 
+             family = gaussian(),
+             chains = 4, 
+             iter = 2000, 
+             warmup = 1000, 
+             control = list(adapt_delta = 0.95))
+
+
+
+```
+
+
+
+```{r}
+#| fig-cap: "The prior predictive simulation with new (simulated) participants."
+
+
+preds_prior <- predictions(m2_pp, newdata = data.frame(sampletime = seq(0, 150, 10), 
+                                                       participant = rep(1:5, each = 16)), 
+                           allow_new_levels = TRUE)
+
+
+posterior_draws(preds_prior) %>%
+  filter(drawid %in% 1:500) %>%
+  ggplot(aes(sampletime, draw, group = paste(participant, drawid))) + 
+  geom_line(alpha = 0.1) + 
+  
+  facet_wrap(~ participant) +
+  
+  labs(title = "Prior predictive simulation",
+       x = "Sample time",
+       y = "Glucose (standardized)") 
+
+
+
+
+```
+
+Next we run the model with data. This is a more complicated model, we will need to check that the model fitting mechanisms function properly.
+
+```{r}
+
+m2 <- update(m2_pp,
+             newdata = pre_dat, 
+             file = "fits/01-ogtt/m2",
+             sample_prior = "no", # Sample from the posterior
+             iter = 4000, # Increase the number of iterations to get a convergance.
+             cores = 4,
+             warmup = 1000, 
+             control = list(adapt_delta = 0.95))
+
+
+```
+
+We can start by checking if the sampling has been sucessfull. 
+
+
+```{r}
+plot(m2)
+```
+
+Next we can look at the posterior predictions. The colored draws are curves for each participant when information has been shared among them. This means that curves in black that only use information from each participant likely ovefit to "extreme" data points for each participant. 
+
+```{r}
+#| fig-cap: "The posterior predictive simulation shows the expected glucose values over time. Each line represents a 'draw' from the posterior distribution with different parameters estimates. Participant level data are estimated slightly differently than models using only the information in each participants as the model ppols data across particiapants."
+
+
+
+nd <- expand_grid(sampletime = seq(0, 120, 5), 
+                  participant = pull(distinct(pre_dat,participant), participant)) %>%
+  data.frame()
+
+## Checking posterior predictions as draws.
+preds <- predictions(m2, newdata = nd) 
+
+
+posterior_draws(preds) %>%
+  filter(drawid %in% 1:500) %>%
+  filter(participant %in% c("3001", "3003", "3005", "3006")) %>%
+  ggplot(aes(sampletime, draw, group = paste0(participant,drawid))) + 
+  
+  
+  geom_line(alpha = 0.1, aes(color = as.factor(participant))) + 
+  
+  geom_point(data = filter(pre_dat, participant %in% c("3001", "3003", "3005", "3006")), 
+             aes(sampletime, stglucose, group = NULL, 
+                 fill = as.factor(participant)), 
+             alpha = 1, shape = 21, size = 2) +
+  
+  geom_smooth(method="lm", se=FALSE, color = "black", linetype = "dashed",
+              aes(sampletime, stglucose, group = participant),
+             data = filter(pre_dat, participant %in% c("3001", "3003", "3005", "3006")), 
+   formula=  y ~ splines::bs(x, df = 4)) +
+  
+  
+  labs(title = "Posterior predictive simulation (Global and participant specific smooths)",
+       subtitle = "Posterior draws as lines per participant, data as points",
+       x = "Sample time (min)",
+       y = "Glucose (Standardized units)") + 
+  theme_classic()  +  facet_wrap(~ participant)
+
+```
+
+## Comparing groups
+
+Next we leap to comparing groups across time. We will use the complete data set and allow for particiapnts to have different curves pre- and post-intervention. This is a large model, we need to check that the model is working properly. 
+
+After we have fitted the model we can compare groups using predictions from the posterior distribution.
+
+First we will see what priors are needed for the model. See also a explanation of the model formulation below. 
+
+```{r}
+
+# The data 
+compl_dat <- ogtt_dat %>%
+  mutate(grp = paste(time, gruppe, sep = "_")) 
+# The model formulation (and priors needed)
+
+get_prior(stglucose ~  0 + grp + # Each group will have its own intercept
+             bs(sampletime, df = 4):grp + # Group level splines
+            (1 + bs(sampletime, df = 4):time|participant), # Participant level splines per time
+          data = compl_dat, 
+          family = gaussian())
+
+```
+
+This is a lot of priors!
+
+We define them below 
+
+```{r}
+
+prior3 <- c(   prior(normal(-1, 1.5), class = b, coef = "grppost_old_con"),
+               prior(normal(-1, 1.5), class = b, coef = "grppost_old_int"),
+               prior(normal(-1, 1.5), class = b, coef = "grppost_young_int"),
+               prior(normal(-1, 1.5), class = b, coef = "grppre_young_int"),
+               prior(normal(-1, 1.5), class = b, coef = "grppre_old_con"),
+               prior(normal(-1, 1.5), class = b, coef = "grppre_old_int"),
+               
+               prior(normal(1, 1.5),   class = b, coef = "grppost_old_con:bssampletimedfEQ41"),
+               prior(normal(0.5, 1.5), class = b, coef = "grppost_old_con:bssampletimedfEQ42"),
+               prior(normal(-1, 1.5),   class = b, coef = "grppost_old_con:bssampletimedfEQ43"),
+               prior(normal(-0.5, 1.5),class = b, coef = "grppost_old_con:bssampletimedfEQ44"),
+               
+               prior(normal(1, 1.5),   class = b, coef = "grppost_old_int:bssampletimedfEQ41"),
+               prior(normal(0.5, 1.5), class = b, coef = "grppost_old_int:bssampletimedfEQ42"),
+               prior(normal(-1, 1.5),   class = b, coef = "grppost_old_int:bssampletimedfEQ43"),
+               prior(normal(-0.5, 1.5),class = b, coef = "grppost_old_int:bssampletimedfEQ44"),
+               
+               prior(normal(1, 1.5),   class = b, coef = "grppost_young_int:bssampletimedfEQ41"),
+               prior(normal(0.5, 1.5), class = b, coef = "grppost_young_int:bssampletimedfEQ42"),
+               prior(normal(-1, 1.5),   class = b, coef = "grppost_young_int:bssampletimedfEQ43"),
+               prior(normal(-0.5, 1.5),class = b, coef = "grppost_young_int:bssampletimedfEQ44"),
+               
+               ## Pre
+               
+               prior(normal(1, 1.5),   class = b, coef = "grppre_old_con:bssampletimedfEQ41"),
+               prior(normal(0.5, 1.5), class = b, coef = "grppre_old_con:bssampletimedfEQ42"),
+               prior(normal(-1, 1.5),   class = b, coef = "grppre_old_con:bssampletimedfEQ43"),
+               prior(normal(-0.5, 1.5),class = b, coef = "grppre_old_con:bssampletimedfEQ44"),
+               
+               prior(normal(1, 1.5),   class = b, coef = "grppre_old_int:bssampletimedfEQ41"),
+               prior(normal(0.5, 1.5), class = b, coef = "grppre_old_int:bssampletimedfEQ42"),
+               prior(normal(-1, 1.5),   class = b, coef = "grppre_old_int:bssampletimedfEQ43"),
+               prior(normal(-0.5, 1.5),class = b, coef = "grppre_old_int:bssampletimedfEQ44"),
+               
+              prior(normal(1, 1.5),   class = b, coef = "grppre_young_int:bssampletimedfEQ41"),
+              prior(normal(0.5, 1.5), class = b, coef = "grppre_young_int:bssampletimedfEQ42"),
+              prior(normal(-1, 1.5),   class = b, coef = "grppre_young_int:bssampletimedfEQ43"),
+              prior(normal(-0.5, 1.5),class = b, coef = "grppre_young_int:bssampletimedfEQ44"),
+               
+               prior(lkj(1), class = cor),
+               # The wigglyness SD, wigglyness is sampled from a exponential distribution
+               prior(exponential(2), class = sd),
+               # The prior for the residual variation
+               prior(exponential(1), class = sigma)
+             )
+
+
+```
+
+
+Next we fit a model based on the priors. 
+
+```{r}
+m3_pp <- brm(stglucose ~  0+grp + bs(sampletime, df = 4):grp +
+               (1 + bs(sampletime, df = 4)|participant),
+             prior = prior3,
+             file = "fits/01-ogtt/m3_pp", # Save the model
+             sample_prior = "only", # Sample only from the prior
+             data = compl_dat, 
+             family = gaussian(),
+             iter = 2000, 
+             warmup = 1000, 
+             control = list(adapt_delta = 0.95))
+             
+```
+
+In this prior predictive simulation we want to be sure that each group gets similar curves. The plot below seems to indicate that this is the case. 
+
+```{r}
+
+
+preds_prior <- predictions(m3_pp, newdata = expand_grid(sampletime = seq(0, 150, 10),
+                                                        grp = c('post_old_con', 'post_old_int', 'post_young_int',
+                                                                'pre_old_con', 'pre_old_int', 'pre_young_int'),
+                                                        participant = rep(1)), 
+                           allow_new_levels = TRUE)
+
+
+posterior_draws(preds_prior) %>%
+  filter(drawid %in% 1:500) %>%
+  ggplot(aes(sampletime, draw, color = grp, group = paste(participant, drawid, grp))) + 
+  geom_line(alpha = 0.1) + 
+  
+  facet_wrap(~ grp) +
+  
+  labs(title = "Prior predictive simulation",
+       x = "Sample time",
+       y = "Glucose (standardized)") 
+
+
+```
+
+Fitting the model with data.
+
+```{r}
+
+m3 <- update(m3_pp,
+             newdata = compl_dat, 
+             file = "fits/01-ogtt/m3",
+             sample_prior = "no", # Sample from the posterior
+             iter = 4000, 
+             cores = 4,
+             warmup = 1000, 
+             control = list(adapt_delta = 0.95))
+
+
+# plot(m3) These looks good
+#print(m3) the Rhat and n_eff looks good...
+
+
+
+
+```
+
+Next we can plot the posterior predictions from the model. We create a data set that has the possible combinations of groups. We then use the `predictions` function to get the expected glucose values over time for each group. 
+
+
+```{r}
+
+
+nd <- expand_grid(sampletime = seq(0, 120, 2), 
+                  grp = c('post_old_con', 'post_old_int', 'post_young_int',
+                          'pre_old_con', 'pre_old_int', 'pre_young_int'),
+                  participant = 1) %>%
+  data.frame()
+
+
+preds <- predictions(m3, newdata = nd, allow_new_levels = TRUE) 
+
+```
+
+In the `preds` object we have model predictions, these can be extracted as draws and used to compare groups. Below we take our predictions per draw and sample time for each group and use `pivot_wider` to make each group a separate column. We then calculate the differences as needed. 
+
+Notice that groups are combination of grouping and time point.
+
+```{r}
+#| fig-cap: "Posterior predictions and comparisons between control and intervention (old only) shows that the intervention group lowers their glucose responses after the intervention (the 95% credible interval shows robust difference at about 50 min after glucose stimulation."
+
+
+comp_df <- posterior_draws(preds) %>%
+  filter(drawid %in% 1:2000) %>%
+  select(drawid, sampletime, draw, grp, participant) %>%
+  pivot_wider(names_from = grp, values_from = draw) %>%
+  
+  # Compare "groups" as within group differences between time points 
+  mutate(yng = post_young_int - pre_young_int,
+         old = post_old_int - pre_old_int, 
+         con = post_old_con - pre_old_con) %>%
+  # Compare differences in groups across time-points between groups
+  # Make this list longer as needed
+  
+  mutate(comp = old - con)
+  
+  
+# Using the data we can calculate 95% credible intervals for the differences between groups.
+  
+comp_df %>%  
+  # Group the data frame by sample time
+  group_by(sampletime) %>%
+  # ... and calculate summary statistics for the differences
+  summarise(m = mean(comp, na.rm = TRUE), 
+            l = quantile(comp, 0.025, na.rm = TRUE), 
+            u = quantile(comp, 0.975, na.rm = TRUE)) %>%
+  ggplot(aes(sampletime, m)) + 
+  geom_ribbon(aes(ymin = l, ymax = u), alpha = 0.2) +
+  geom_line() + 
+  labs(x = "Sample time", y = "Blood glucose difference (standardized values)", 
+       title = "Comparisons between changes from pre- to\npost-training between control and intervention (old only)")
+
+
+
+
+```
+
+
+Notice that the values are on the standardized scale. We can convert them back to the original scale by multiplying with the standard deviation and adding the mean. 
+
+```{r}
+
+scale <- attr(ogtt_dat$stglucose, "scaled:scale")
+center <- attr(ogtt_dat$stglucose, "scaled:center")
+
+comp_df <- posterior_draws(preds) %>%
+  filter(drawid %in% 1:2000) %>%
+  select(drawid, sampletime, draw, grp, participant) %>%
+  
+  # Converting back to original scale
+  mutate(draw = draw * scale + center) %>%
+  
+  pivot_wider(names_from = grp, values_from = draw) %>%
+  
+  # Compare "groups" as within group differences between time points 
+  mutate(yng = post_young_int - pre_young_int,
+         old = post_old_int - pre_old_int, 
+         con = post_old_con - pre_old_con) %>%
+  # Compare differences in groups across time-points between groups
+  # Make this list longer as needed
+  
+  mutate(yng_vs_old = yng - old, 
+         yng_vs_con = yng - con, 
+         old_vs_con = old - con)
+  
+saveRDS(comp_df, "data/data-gen/comp_df_ogtt.rds")
+
+# Using the data we can calculate 95% credible intervals for the differences between groups.
+
+comp_df %>%  
+  # Group the data frame by sample time
+  group_by(sampletime) %>%
+  # ... and calculate summary statistics for the differences
+  summarise(m = mean(yng_vs_old, na.rm = TRUE), 
+            l = quantile(yng_vs_old, 0.025, na.rm = TRUE), 
+            u = quantile(yng_vs_old, 0.975, na.rm = TRUE)) %>%
+  ggplot(aes(sampletime, m)) + 
+  geom_ribbon(aes(ymin = l, ymax = u), alpha = 0.2) +
+  geom_line() + 
+  labs(x = "Sample time", y = "Blood glucose difference (mmol L-1)", 
+       title = "Comparisons between changes from pre- to post-training between\n young and old participants") + 
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  
+  theme_classic()
+
+
+
+```
+
+
+
+```{r}
+
+## Combine information to display pre- and post estimates per group
+time_df <- comp_df |> 
+  dplyr::select(drawid:pre_young_int) |> 
+  pivot_longer(cols = post_old_con:pre_young_int) |> 
+  separate(name, into = c("time", "age", "grp")) |> 
+  
+    summarise(.by = c(sampletime, time, age, grp),
+              m = mean(value, na.rm = TRUE), 
+              l95 = quantile(value, 0.025, na.rm = TRUE), 
+              u95 = quantile(value, 0.975, na.rm = TRUE),
+              l80 = quantile(value, 0.1, na.rm = TRUE), 
+              u80 = quantile(value, 0.9, na.rm = TRUE),
+              l50 = quantile(value, 0.25, na.rm = TRUE), 
+              u50 = quantile(value, 0.75, na.rm = TRUE)
+              )
+
+
+p1 <- time_df |>   
+  
+  filter(!(age == "old" & grp == "con")) |> 
+  mutate(time = factor(time, levels = c("pre", "post"), 
+                       labels = c("Pre- intervention", "Post-intervention")), 
+         age = factor(age, levels = c("young", "old"), 
+                      labels = c("Young (20-30 yrs)", 
+                                 "Old (70+ years)"))) |> 
+  ggplot(aes(sampletime, m, 
+             group = paste(time, grp, age), 
+             color = age
+             )) + 
+  geom_ribbon(aes(ymin = l50, ymax = u50, fill = age, color = NULL), alpha = 0.4) +
+  geom_ribbon(aes(ymin = l80, ymax = u80, fill = age, color = NULL), alpha = 0.2) +
+#  geom_ribbon(aes(ymin = l95, ymax = u95, fill = age, color = NULL), alpha = 0.1) +
+  
+  ## Annotate the ribbon 
+  geom_text(data = data.frame(time = factor("post", 
+                                            levels = c("pre", "post"), 
+                                            labels = c("Pre- intervention", "Post-intervention")), 
+                              
+                              x = rep(121,5), 
+                              y = c(4.8, 5.15, 5.6, 6.05, 6.45), 
+                              lab = c("10%", "25%", "Mean", "75%", "90%")), 
+            aes(x,y, label = lab, group = NULL, color = NULL), 
+            show.legend = FALSE,
+            size = 2.5, 
+            hjust = 0) +
+  
+  
+  geom_line() + 
+  scale_x_continuous(expand = c(0, 15)) +
+  
+  facet_wrap(~ time) + 
+  
+  scale_color_manual(values = c("#0173B2", "#DE8F05")) +
+  scale_fill_manual(values = c("#0173B2", "#DE8F05")) +
+  
+
+  labs(x = "Sample time (min)", y = "Blood glucose (mmol L-1)", 
+       color = "Age group",
+       fill = "Age group",
+       title = "Pre- and post-training OGTT in young and old participants") + 
+
+  theme_classic() + 
+  theme(strip.background = element_blank(), 
+        strip.text = element_text(hjust = 0), 
+        legend.position = "bottom")
+
+
+
+## Comparing training-induced differences
+
+diffcom_df <- comp_df |> 
+  dplyr::select(drawid:sampletime, yng_vs_old) |> 
+
+    summarise(.by = sampletime,
+              m = mean(yng_vs_old, na.rm = TRUE), 
+              l95 = quantile(yng_vs_old, 0.025, na.rm = TRUE), 
+              u95 = quantile(yng_vs_old, 0.975, na.rm = TRUE),
+              l80 = quantile(yng_vs_old, 0.1, na.rm = TRUE), 
+              u80 = quantile(yng_vs_old, 0.9, na.rm = TRUE),
+              l50 = quantile(yng_vs_old, 0.25, na.rm = TRUE), 
+              u50 = quantile(yng_vs_old, 0.75, na.rm = TRUE)
+              ) |> 
+  print()
+  
+p2 <- diffcom_df |> 
+   ggplot(aes(sampletime, m)) + 
+ 
+    geom_hline(yintercept = 0, lty = 2, color = "gray50") +
+  
+   geom_ribbon(aes(ymin = l50, ymax = u50),fill = "#009E73", alpha = 0.4) +
+  geom_ribbon(aes(ymin = l80, ymax = u80),fill = "#009E73",  alpha = 0.2) +
+  geom_ribbon(aes(ymin = l95, ymax = u95),fill = "#009E73",  alpha = 0.1) +
+  geom_line() +
+  
+
+
+  labs(x = "Sample time (min)", y = "Blood glucose (mmol L-1)", 
+       subtitle = "Blood glucose difference pre- to post-intervention, Young - Old ") + 
+  
+  annotate("text", 
+           x = rep(121, 7), 
+           y = c(-0.27, -0.07, 0.15, 0.37, 0.6, 0.8, 1.05), 
+           label = c("2.5%", "10%", "25%", "Mean", "75%", "90%", "97.5%"), 
+           size = 2.5, 
+           hjust = 0) +
+  
+
+  theme_classic() + 
+  theme(strip.background = element_blank(), 
+        strip.text = element_text(hjust = 0), 
+        legend.position = "bottom", 
+        plot.margin = unit(c(0,60,0,60), "pt"))
+
+
+
+library(patchwork)
+
+
+
+p <- p1 / p2
+
+p
+
+
+#ggsave(
+#  filename = ("./figures/figure-4.png"),
+#  plot = p,
+#  device = "png",
+#  width = 180,
+#  height = 200,
+#  units = "mm",
+#  dpi = 300,
+#  bg = "white"
+#)
+#
+#saveRDS(p, ("./figures/figure-4.RDS"))
+
+```
+
+<!-- The following is written by Kristian -->
+
+The figure above shows:
+- Top panel: Raw pre/post OGTT curves by age group - nice descriptive to show what the glucose response looked like
+- Bottom panel: The actual inferential result. The training-induced change (post minus pre) compared between young and old, plotted as a continous credible interval over the full 2hr window.
+
+We also want to report these findings in text, for which we need:
+- The credible time window: where the ribbon's 95% interval excludes zero, which would mean young adults show a credibly larger glucose-lowering training effect than old adults during that window
+- The direction and approximate magnitude at the point of largest effect - e.g., "at the point of maximum divergence (~50 min), young participants showed on average a X mmol/L greater reduction in glucose than old participants (95% CI [L, U])
+
+The following code will extract that information
+
+```{r}
+## Within-group changes from baseline to post
+
+within_df <- comp_df |> 
+  dplyr::select(drawid, sampletime, yng, old, con) |> 
+  pivot_longer(c(yng, old, con), names_to = "group", values_to = "change") |> 
+  summarise(.by = c(group, sampletime),
+            m = mean(change),
+            l95 = quantile(change, 0.025),
+            u95 = quantile(change, 0.975),
+            pos_reduction = round(100 * mean(change < 0), 1))
+
+# Credible windows per group
+within_df |> 
+  mutate(credible = l95 > 0 | u95 < 0,
+         direction = if_else(m < 0, "reduction", "increase")) |> 
+  filter(credible) |> 
+  summarise(.by = c(group, direction),
+            start_time = min(sampletime), end_time = max(sampletime))
+
+# Peak change per group
+within_df |> 
+  slice_max(abs(m), n = 1, by = group)
+
+## Between-group changes from baseline to post 
+
+# Find contiguous windows where the 95% CI excludes zero
+
+credible_windows <- diffcom_df |> 
+  mutate(credible = l95 > 0 | u95 < 0,
+         direction = case_when (
+           u95 < 0 ~ "young < old",
+           l95 > 0 ~ "young > old",
+           TRUE ~ "not credible"
+         )) |> 
+  filter(credible) |> 
+  summarise(.by = direction,
+            start_time = min(sampletime),
+            end_time = max(sampletime))
+
+
+credible_windows
+
+# Point of maximum divergence (largest mean difference)
+diffcom_df |> 
+  slice_max(abs(m), n = 1)
+
+
+# Full picture: credible and non-credible windows for young vs old
+yng_vs_old_summary <- diffcom_df |> 
+  mutate(credible = l95 > 0 | u95 < 0,
+         window = case_when(
+           sampletime < 30 ~ "before window (0-30 min)",
+           sampletime > 78 ~ "after window (78-120 min)",
+           TRUE ~ "credible window (30-78 min)"
+         )) |> 
+  summarise(.by = window,
+            mean_diff_range = paste0(round(min(m), 2), " to ", round(max(m), 2)),
+            credible_pct = round(100 * mean(credible), 0),
+            start_time = min(sampletime),
+            end_time = max(sampletime))
+
+yng_vs_old_summary
+
+
+# Summarise old intervention vs old control, same structure as diffcom_df
+old_vs_con_df <- comp_df |> 
+  dplyr::select(drawid, sampletime, old_vs_con) |> 
+  summarise(.by = sampletime,
+            m = mean(old_vs_con, na.rm = TRUE), 
+            l95 = quantile(old_vs_con, 0.025, na.rm = TRUE), 
+            u95 = quantile(old_vs_con, 0.975, na.rm = TRUE),
+            l80 = quantile(old_vs_con, 0.1, na.rm = TRUE), 
+            u80 = quantile(old_vs_con, 0.9, na.rm = TRUE),
+            l50 = quantile(old_vs_con, 0.25, na.rm = TRUE), 
+            u50 = quantile(old_vs_con, 0.75, na.rm = TRUE)
+            )
+
+# Credible windows for old intervention vs old control
+old_vs_con_windows <- old_vs_con_df |> 
+  mutate(credible = l95 > 0 | u95 < 0,
+         direction = case_when(
+           u95 < 0 ~ "old_int < old_con",
+           l95 > 0 ~ "old_int > old_con",
+           TRUE ~ "not credible"
+         )) |> 
+  filter(credible) |> 
+  summarise(.by = direction,
+            start_time = min(sampletime),
+            end_time = max(sampletime))
+
+old_vs_con_windows
+
+# Point of maximum divergence, old_int vs old_con
+old_vs_con_df |> 
+  slice_max(abs(m), n = 1)
+
+
+# How much data actually supports the tail of the curve?
+compl_dat |> 
+  filter(gruppe %in% c("old_con", "old_int")) |> 
+  mutate(near_end = sampletime > 100) |> 
+  summarise(.by = c(gruppe, near_end), n = n(), n_participants = n_distinct(participant))
+
+
+# pos = posterior probability that the difference is in the reported direction,
+# at the key timepoints you're citing in text
+
+comp_df |> 
+  filter(sampletime %in% c(30, 54, 78)) |> 
+  summarise(.by = sampletime, 
+            pos_yng_less_old = round(100 * mean(yng_vs_old < 0), 1))
+
+comp_df |> 
+  filter(sampletime %in% c(38, 120)) |> 
+  summarise(.by = sampletime, 
+            pos_oldint_less_oldcon = round(100 * mean(old_vs_con < 0), 1))
+
+
+```
+
+#### Results
+
+In older adults, the intervention group reduced its glucose response from 76 min after ingestion until the end of the sampling window, with the largest reduction at 120 min (−0.86 mmol/L, 95% CI [−1.28, −0.46], P(<0) > 99.9%). In the control group, the glucose response likely increased, although the 95% CI included zero (peak at 52 min: 0.46 mmol/L, 95% CI [−0.01, 0.93], P(>0) = 97.1%). The glucose response was lower in the intervention group than in the control group from 38 min through 120 min (at 120 min: −0.73 mmol/L, 95% CI [−1.48, −0.02], P(<0) = 97.7%; at 38 min: P(<0) = 97.5%). Young adults reduced their glucose response from 20 to 120 min after ingestion, with the largest reduction at 58 min (−1.05 mmol/L, 95% CI [−1.44, −0.67], P(<0) > 99.9%). This reduction was larger than in older adults in the intervention group between 30 and 78 min (P(<0) = 98.6% at 30 min and 98.2% at 78 min), with the largest difference at 54 min (−0.85 mmol/L, 95% CI [−1.34, −0.36], P(<0) > 99.9%). Before 30 min, the difference pointed in the same direction but its 95% CI included zero. After 78 min, the point estimate briefly changed sign, and there was no clear age difference by the end of the 2-h window.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

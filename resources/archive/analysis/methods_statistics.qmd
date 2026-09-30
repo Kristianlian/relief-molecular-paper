@@ -1,0 +1,56 @@
+---
+title: "Statistical Analyses"
+format: docx
+---
+
+Adjust this to reflect the data you're actually using in the draft.
+
+# Structure
+
+Model structure — fixed effects, random effects, covariate decisions, and the rationale for where nested vs. simple random intercepts were used
+
+Inference — REML estimation, Type III ANOVA with Satterthwaite df, α = .05
+Planned contrasts — the four contrast types used across outcomes, framed as hypothesis-driven rather than exploratory
+
+Secondary models — the intervention vs. control comparison for older adults, including the baseline imbalance caveat
+
+Exercise volume — framed explicitly as a manipulation check
+
+Convergence decisions — a transparent account of where and why the random effects structure was simplified
+
+# Statistical Analyses
+
+All statistical analyses were performed in R (version x.x.x; R Core Team, 20xx) <!-- figure out and fill in--> using the *lme4* and *lmerTest* packages for linear mixed model fitting, and the *emmeans* <!-- figure out and fill in package versions, use packageVersion("lme4") for this -->package for estimated marginal means and planned contrasts.
+
+## Primary and Secondary Outcome Models
+
+Hypertrophic and strength outcomes were analysed using linear mixed models (LMMs) with a fixed effects structure of Age Group × Condition × Time, where Age Group (young vs. old) and Condition (low vs. moderate volume) were between-leg, within-participant factors, and Time (pre, mid, post; or pre and post for muscle volume and DXA arm lean mass) was a repeated measure. All models included a random intercept for participant to account for individual differences in baseline outcome levels. For outcomes where measurements were taken per leg (isokinetic peak torque at 60, 120, and 240°/s; muscle thickness), a nested random intercept structure (leg within participant) was used where model convergence permitted and where inspection of residual variance indicated meaningful leg-level clustering. For isometric peak torque, leg press 1RM, and bicep curl MVC, a single random intercept for participant was used, as the leg-level random effect either failed to converge or explained negligible variance. Bicep curl MVC additionally included biological sex as a fixed covariate given the large and well-established sex difference in upper limb strength. Model fixed effects were estimated using restricted maximum likelihood (REML), and significance of fixed effects was evaluated using Type III analysis of variance with Satterthwaite's method for degrees of freedom approximation, as implemented in *lmerTest*.
+
+The primary inferential question — whether training volume dose-response differed between age groups — was addressed by the three-way Age Group × Condition × Time interaction term. Where this interaction was non-significant, lower-order two-way interactions and main effects were interpreted. Statistical significance was set at α = .05 for all tests.
+
+## Planned Contrasts
+
+Following omnibus model testing, estimated marginal means (EMMs) were extracted using the *emmeans* package and used to address specific a priori research questions through planned pairwise contrasts. Contrasts were not adjusted for multiple comparisons given their hypothesis-driven nature, and confidence intervals are reported at the 95% level using the Kenward-Roger degrees of freedom method throughout. The following contrasts were specified for each outcome where relevant:
+
+1.  **Pre-to-post (and pre-to-mid, mid-to-post) change within each Age Group × Condition cell**, to quantify within-group training responses and characterise the temporal trajectory of adaptation.
+2.  **Low vs. moderate volume at each timepoint within each age group**, to examine dose-response effects separately for young and older adults.
+3.  **Young vs. old at each timepoint**, averaged across conditions, to characterise the age-related difference in outcome levels and its evolution across the intervention.
+4.  **Age Group × Condition interaction contrast at each timepoint**, to formally test whether the low vs. moderate volume difference differed between age groups at each measurement occasion.
+
+For the isometric and isokinetic outcomes where a significant Age × Time interaction was found, an additional interaction contrast was computed to quantify how much more young adults gained than older adults from pre to mid and pre to post, and whether this divergence changed between training blocks.
+
+## Secondary Models: Intervention vs. Control (Older Adults)
+
+To contextualise training-induced changes in older adults, a secondary model was fitted for each outcome including all older participants (trained intervention groups combined and untrained control group). In this model, a binary trained variable (intervention vs. control) replaced the three-level condition factor, with Time retained as a repeated measure and a random intercept for participant. The primary contrast of interest was the Trained × Time interaction, indicating whether the groups changed differently over the intervention period. Where this interaction was significant or approached significance, within-group pre-to-post contrasts were used to characterise change in each group separately, and between-group contrasts at each timepoint were used to assess absolute differences, with the caveat that pre-existing baseline differences between groups were noted and taken into account when interpreting post-intervention comparisons.
+
+## Exercise Volume Load (absolute)
+
+Total accumulated volume load across the intervention was modelled as a function of Age Group, Condition, and their interaction, with sex included as a covariate and a random intercept for participant. This model served primarily as a manipulation check to confirm that the intended dose difference between conditions was successfully implemented and comparable across age groups. No time variable was included as volume load was aggregated across the full intervention period per condition per participant.
+
+## Exercise Volume Load (relative)
+
+To quantify training volume load, each set was expressed as the product of load (kg) and repetitions completed, and summed across all sessions per participant per condition. To assess whether the relative dose separation between conditions was comparable across age groups, volume load was log-transformed prior to analysis, allowing condition contrasts to be interpreted as multiplicative fold-differences. A linear mixed model was fitted with log-transformed volume load as the outcome, age group, condition, and their interaction as fixed effects, sex as a covariate, and a random intercept for participant.
+
+## Model Convergence and Random Effects Structure
+
+Where the inclusion of a nested random effect (leg within participant) produced singular fits — indicating that the leg-level variance component was estimated at or near zero — the random effects structure was simplified to a participant-level intercept only. This occurred for muscle volume, arm lean mass, isometric peak torque, leg press 1RM, and bicep curl MVC. For muscle thickness and isokinetic peak torque (60, 120, 240°/s), the nested structure was retained as the leg-level variance component was non-zero and meaningful. In all cases, the simplified structure was judged appropriate given the fixed effects already capturing condition-level differences between legs within participants.

@@ -1,0 +1,136 @@
+Discussion topics/question
+
+----------- Comments in the manuscript -------------------
+- Line 49: You suggest this hierarchy of the aims
+    - Effects of RT in elderly compared to young (functional, morphological)
+    - Further effects of volume (functional, morphological)
+    - Molecular markers for ribosome biogenesis (any effect of volume/age?)
+  - RESOLVED: Adapt this into the intro, and follow the hierarchy in methods/results
+    - Muscle accretion + strength -> ogtt -> molecular
+  - DONE
+
+
+- Line 161: "During pre-testing, the first of these two testing days represented familiarisation."
+  - Comment: "Does this mean that we will not use this test? If we are using it we could instead say 
+  two tests per time-point (easier to understand)..."
+  - RESOLVED: Only one from pre, both from mid/post 
+  
+  
+- Line 217: Do you plan on going through the entire RNA-seq methods description?
+  - RESOLVED: Daniel will take a look at it
+
+- Line 356: Fig 2, should A and C be relative change per condition and group instead?
+  - Do you mean relative change in the raw data? And keep the CI/pos panel?
+  - Also, looking into the ultra sound data using all images yielded no meaningful change. I can update
+  the current "03-muscle.qmd" with that angle, or keep it around as a supplementary thing to show that we
+  looked into it. 
+  - RESOLVED: New fig, only muscle volume with 95% CI line, point estimate, pos value as is. Try to add the density curve
+  on top of the 95% CI line
+    - Contrast in order: int vs. con -> yng vs. old -> mod vs. low -> vol effect
+  - DONE
+  
+  
+- Line 434: Fig 3, peak torque
+  - Comment: "What about the force velocity analysis, should we do another try at that to avoid 
+  presenting 4 comparisons per contrast?"
+  - RESOLVED: Hill-curve fig, possibly CI + pos below - Fix after Daniel has reviewd the code
+  
+
+- Line 546: Fig 5
+  - Comment: Do we have post measurements here?
+    - Probably make a separate legend for the UBF/c-Myc panels to avoid this confusion. Im guessing 
+    thats what you mean?
+    - RESOLVED: Display total RNA as change from baseline -> w3 -> post per group/condition
+    - Keep UBF/c-Myc as is for now, until sufficient data
+
+
+
+  
+- Line 373: 
+  - Comment 1: "See note above about presenting the data.." 
+  - Im not sure which comment you're referring to here, relative change as suggested for the figure?
+  Currently its reported as relative change in the predicted values I guess
+  - Comment 2: "Credible intervals the same as credible increases"
+  - The statment is not really using "credible increases" as a term like credible intervals, but that 
+  the increases were credible. I can change the wording if needed.
+  - But, if I cannot use credible in that way, what is the proper use?
+
+  
+  
+
+  
+  
+----------- Figures ----------------------
+- Fig 2: Only muscle volume
+  - Keep the 95% CI and pos, everything else is cut away and reported in text
+  - Try do add the density curve to the 95% CI line
+
+- Fig 3: Only humac data, as a hill-curve (CI + pos in a panel below)
+  - Cut away 1RM and bicep curl, report in text only
+  
+- Fig 4: OGTT
+  - Remains the same, but is shown earlier in the results
+  
+- Fig 5: Molecular
+  - RNA: Show the change instead of the density curve on/contrasts
+
+
+---------- Results ------------------------
+- Report in this order
+  - Intervention vs. control = did RT work?
+  - Young vs. old = was there a difference in the respons?
+  - Volume within condition
+  - Volume between condition
+- Report in this fashion¨
+  - %change within group (95% CI [], pos = %), diff change between groups (95% CI [], pos = %)
+
+
+---------- Statistical -------------------
+
+Overall: What model do we use?
+- form2/m2: form2 <- bf(ystd ~   0 + tx_sex + tx_sex:time  + (1 + time|participant) +  (1|participant:leg))
+  - No intercept, tx_sex fixed effect - all 10 groups (5 tx * 2 sex) get fully independent, unpooled intercepts
+  - tx_sex:time: each of the 10 groups gets its own fully independent pre-post change, with no shrinkage toward a grand mean
+  - Particiant-level random intercept and random time slope (individual trajectories), plus participant:leg
+  
+- form3/m3: form3 <- bf(ystd ~   time + allocation + allocation:time +  (1 + time|participant) +  (1|participant:leg) + (time | tx_sex))
+  - Same fixed-effect structure, distinguishing between allocation only (intervention, control)
+  - Age and volume-conditions arent fixed effects here
+  - Group granularity via varying tx_sex effect
+  - Participant gets the fuller random structure like form2
+  
+- Strenght: Model both reps at each time point (1x famil and 1x baseline, 2x mid, 2x post)? All leg strength into one model? 
+
+
+Muscle Thickness - RESOLVED
+- Look at both V. lateralis and intermedius
+    - likely only lateralis, since theres usually not much happening in intermedius (take it separately if anything)
+- 3x pictures per leg/time point - average or use all three?
+    - Try all three, perhaps less noise than averaging them all
+- UPDATE: No meaningful change after including all three images at each measurement. Some contrasts came 
+out slightly narrower, some slightly wider, with no systemaci change in precision. The same contrasts
+remain credible (clearing the 95% CI in both) and not credible. Based on that, it seems best to keep the
+original modelling as is, and keep the "all images" one as supplementary, should anyone ask about it. 
+
+
+Peak Torque
+- Model all reps from each test? 
+  - Each test has 2x3 at each angular velocity - 3x1 for isometric 
+- All angular velocities into one model?
+- Regardless, use the force/velocity fig to display the data, perhaps with pos on the side/below
+
+
+1RM leg press
+- Some participants have tested with both legs during familiarization, i.e. we cannot use this as a baseline
+- Check the spreadsheet for typos
+
+
+Bicep curl
+- Model all reps from each test?
+  - 3x per arm per test
+
+
+UBF/c-myc
+- The pp_check looks quite messy compared to all the above, either the models need work, or it might be a result of a lower sample size?
+- c-myc low peaks: Experiencing model-complexity issues here, specifically from mlo2.post and mlo3.post. It's possibly a reflection of this peaks signal-to-noise ratio, but Im not sure. 
+- area/max(area) for å normalisere per plate

@@ -1,0 +1,248 @@
+---
+title: "Total RNA data visualization"
+format: html
+editor_options: 
+  chunk_output_type: console
+---
+
+
+```{r, setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+
+```
+
+## Purpose
+
+The purpose is to inspect and process the total RNA data from the "ReLiEf" project. The data consists of total RNA concentration measured from skeletal muscle biopsies (microbiopsies) at baseline, after 3 weeks and at post. The primary comparison will be baseline-post. 
+
+```{r, data import}
+
+library(tidyverse)
+
+rna.dat <- reliefdata::relief_rnaconc %>%
+  mutate(participant = ifelse(is.na(participant), "blank", participant),
+         leg = ifelse(is.na(leg), "blank", leg),
+         time = ifelse(is.na(time), "blank", time),
+         weight = ifelse(is.na(weight), "0", weight))  %>% 
+  mutate(total.rna = conc * 4 * 25) %>% 
+  dplyr::select(participant, leg, time, weight, well, plate, sample, total.rna) %>% 
+  print()
+
+participant <- reliefdata::relief_participants %>%
+  select(participant, age, allocation) 
+
+condition <- reliefdata::relief_volume %>%
+  select(participant, condition, leg) %>%
+  mutate(participant = as.character(participant))
+
+
+rna.dat2 <- rna.dat %>%
+  full_join(participant) %>%
+  full_join(condition)
+
+rnadat <- rna.dat2 %>%
+  mutate(age = ifelse(is.na(age), "blank", age),
+         allocation = ifelse(is.na(allocation), "blank", allocation),
+         age.group = ifelse(age < 65, "yng", "old"),
+         time = factor(time, levels = c("pre", "w3", "post")),
+         weight = as.numeric(weight),
+         condition = ifelse(is.na(condition), "blank", condition),
+         condition = case_when(participant %in% c("3071", "3075", "3076",
+                                                  "3083", "3084", "3085",
+                                                  "3086", "3090", "3091",
+                                                  "3094") ~ "none", TRUE ~ condition))
+
+# Normalizations for biopsy weight and between plates
+# first of, creating a normalization for biopsy weight,
+# this simply normalized conc by weight directly
+
+rna.norm <- rnadat %>%
+  mutate(tot_rna_norm = total.rna/weight)
+
+# Second, controlling for plate variation
+# This is done by normalizing each sample's concentration to the mean
+# of the blanks on the same plate
+
+#blank_means <- rnadat %>%
+#  filter(sample == "Blank1") %>%
+#  group_by(plate) %>%
+#  summarise(blank_mean = mean(conc, na.rm = TRUE),
+#            .groups = "drop")
+
+# combining the normalization data
+
+# First joining back and subtracting the plate blank mean
+# QUESTION: DO I SUBTRACT OR DIVIDE BY THE BLANK MEAN?
+#rnanorm <- rna.norm %>%
+#  left_join(blank_means, by = "plate") %>%
+#  mutate(conc_corrected = conc - blank_mean) 
+
+# Then combining both corrections
+
+#rna.final <- rnanorm %>%
+#  mutate(conc_final = conc_corrected / weight) 
+
+
+
+
+
+rna_yng <- rna.norm %>%
+  filter(age.group == "yng")
+
+
+
+```
+
+```{r, fig 1}
+
+
+
+
+rna.norm %>% 
+  
+    filter(participant != "blank") %>% 
+  
+  ggplot(aes(weight, total.rna)) + geom_point() + 
+  geom_smooth(method = "lm")
+  
+  print()
+  
+rna.norm %>%
+  summarise(.by = c(participant, leg, time, sample, condition, allocation, age.group), 
+            total.rna = mean(tot_rna_norm, na.rm = TRUE)) %>% 
+  
+  filter(participant != "blank", 
+         !is.na(time),
+         age.group == "yng") %>% 
+  ggplot(aes(x = time, y = total.rna, color = condition, group = paste(participant, leg))) +
+  
+  geom_line(linewidth = 0.8) +
+  geom_point(size = 2.5) 
+  
+
+  
+  facet_wrap(vars(age.group, allocation), scales = "fixed") +
+  
+  
+  scale_color_manual(values = c("low" = "#E69F00", "mod" = "#56B4E9", "none" = "gray50"),
+                     name = "Training Volume") +  # <-- hide the color legend
+  
+  scale_fill_manual(values = c("low" = "#E69F00", "mod" = "#56B4E9", "none" = "gray50"),
+                    guide = "none") +  # <-- add fill scale
+  
+  labs(title = "",
+       subtitle = "",
+       x = "Time",
+       y = "Mean RNA conc") +
+  
+  theme_minimal() +
+  theme(legend.position = "bottom") +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.line = element_line(color = "black"))
+
+check <- rna.norm %>%
+  filter(tot_rna_norm > 1500,
+         participant != "blank")
+
+
+
+# summarising means and SD per group
+rna.sum <- rna.final %>%
+  group_by(time, condition, age.group, allocation) %>%
+  summarise(mean_conc = mean(conc_final, na.rm = TRUE),
+            sd_conc = sd(conc_final, na.rm = TRUE),
+            .groups = "drop") 
+
+individual.pts <- rna.final %>%
+  filter(time != "Blank1") 
+
+set.seed(1)
+
+# plot
+rnafig1 <- rna.sum %>%
+  filter(time != "Blank1") %>%
+
+  ggplot(aes(x = time, y = mean_conc, color = condition, group = condition)) +
+  
+  geom_line(linewidth = 0.8) +
+  geom_point(size = 2.5) +
+  
+  #adding individual data instead of errorbars
+  geom_point(data = individual.pts,
+             aes(x = time, y = conc_final,
+                 color = condition, group = condition),
+                 size = 1.5,
+                 alpha = 0.3,
+             position = position_jitter(width = 0.2)) +
+  
+  facet_wrap(vars(age.group, allocation), scales = "fixed") +
+  
+  
+  scale_color_manual(values = c("low" = "#E69F00", "mod" = "#56B4E9", "none" = "gray50"),
+                     name = "Training Volume") +  # <-- hide the color legend
+  
+  scale_fill_manual(values = c("low" = "#E69F00", "mod" = "#56B4E9", "none" = "gray50"),
+                    guide = "none") +  # <-- add fill scale
+  
+  labs(title = "",
+       subtitle = "",
+       x = "Time",
+       y = "Mean RNA conc") +
+  
+  theme_minimal() +
+  theme(legend.position = "bottom") +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.line = element_line(color = "black"))
+  
+  #facet_grid(age.group ~ allocation) +
+  #
+  #labs(
+  #  x = "time",
+  #  y = "mean rna conc",
+  #  color = "condition",
+  #  title = "Mean rna conc fig"
+  #) +
+  #theme_bw()
+
+rnafig1
+
+
+
+
+
+```
+
+Comments:
+
+- Jeg brukte conc dataen fra "relief_rnaconc" datasettet
+- Normaliserte først konsentrasjon til biopsivekt direkte slik:
+
+rna.norm <- rnadat %>%
+  mutate(conc_norm = conc/weight)
+  
+- Så forsøkte jeg å kontrollere for mulig variasjon mellom plater slik:
+
+blank_means <- rnadat %>%
+  filter(sample == "Blank1") %>%
+  group_by(plate) %>%
+  summarise(blank_mean = mean(conc, na.rm = TRUE),
+            .groups = "drop")
+            
+rnanorm <- rna.norm %>%
+  left_join(blank_means, by = "plate") %>%
+  mutate(conc_corrected = conc - blank_mean) 
+  
+rna.final <- rnanorm %>%
+  mutate(conc_final = conc_corrected / weight) 
+  
+  - Usikker på om det er rett måte å gjøre det på, men her ble i alle fall hver
+  prøves konsentrasjon normalisert til gjennomsnittet av blank konsentrasjonen på
+  samme plate
+  - Synes dette ser litt spesielt ut, så enten er dataene utenom det vanlige, 
+  eller så har jeg gjort noe merkelig - mistenker sistnevnte i første omgang
+  - Har pushet det til github, så det finnes i qmd filen: total_rna.qmd
+
+

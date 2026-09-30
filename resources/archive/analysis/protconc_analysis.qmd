@@ -1,0 +1,170 @@
+---
+title: "Total Protein Analysis"
+format: html
+editor_options: 
+  chunk_output_type: console
+---
+
+
+```{r, setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+
+```
+
+
+## Relief Protein Concentration Analysis
+
+This qmd is made with the purpose of analysing the total protein data, to investigate the change from baseline to 3w across age groups/conditions.
+
+```{r, packages and data}
+
+#--- Packages ------------------------------------------------------------------
+
+library(lme4); library(lmerTest); library(emmeans); library(tidyverse)
+
+
+#--- Data ----------------------------------------------------------------------
+
+prot_dat <- reliefdata::relief_protconc
+
+prot_qual <- reliefdata::relief_protqual
+
+participants <- reliefdata::relief_participants %>%
+  mutate(age_grp = if_else(age < 40, "yng", "old")) %>%
+  select(-sex, -height, -weight)
+
+condition <- reliefdata::relief_volume %>%
+  mutate(participant = as.character(participant)) %>%
+  select(-arm)
+
+
+#--- Wrangling -----------------------------------------------------------------
+
+
+# Running a quality check first. A cv% below 10 is usually considered clean, while anything above 15% is considered quite unreliable
+
+# Flag high CV samples
+prot_qc <- prot_qual %>%
+  mutate(flag_cv = cv_p > 15)
+
+# Check flagged
+prot_qc %>% filter(flag_cv)
+
+# Identify the 4 missing samples
+all_samples <- prot_dat %>% distinct(sample)
+missing_from_qc <- all_samples %>%
+  anti_join(prot_qual, by = "sample")
+missing_from_qc
+
+# Inspecting flagged samples
+prot_dat %>%
+  filter(sample %in% c("4.1", "23.3")) %>%
+  select(sample, participant, leg, time, dil_fac, well)
+# The 23.3 sample from well D09 clearly deviates from the two others, in addition to having a CV% of 57.7, so something quite obviously went wrong here, and this one sample should be excluded to not greatly impact the avg of 23.3. Sample 4.1 is less obvious, since the CV% is borderline and the value itself does not deviate massively from the two others. Excluding the D09 sample from 23.3, but keeping all three from 4.1 for now. 
+
+
+# Remove the single outlier well for 23.3
+prot_dat_clean <- prot_dat %>%
+  filter(!(sample == "23.3" & well == "D09"))
+
+# Full cleanup
+prot_final <- prot_dat %>%
+  # Remove outlier well
+  filter(!(sample == "23.3" & well == "D09")) %>%
+  # Aggregate triplicates
+  group_by(sample, participant, leg, time) %>%
+  summarise(
+    protein_conc = mean(dil_fac, na.rm = TRUE),
+    n_reps = n(),
+    cv_p = sd(dil_fac, na.rm = TRUE) / mean(dil_fac, na.rm = TRUE) * 100,
+    .groups = "drop"
+  ) %>%
+  mutate(flag = case_when(
+    cv_p > 15 ~ "high_cv",
+    n_reps < 3 ~ "low_reps",
+    TRUE ~ NA_character_
+  )) %>%
+  # Remove participants with insufficient data
+  filter(!participant %in% c(3084, 3090)) %>%
+  # Coerce participant to character for joining
+  mutate(participant = as.character(participant))
+
+# Build baseline covariate
+pre_vals <- prot_final %>%
+  filter(time == "pre") %>%
+  select(participant, baseline_conc = protein_conc)
+
+# Build model-ready df
+prot_model <- prot_final %>%
+  filter(time == "w3") %>%
+  left_join(pre_vals, by = "participant") %>%
+  left_join(participants %>% select(participant, age_grp, allocation), by = "participant") %>%
+  left_join(condition, by = c("participant", "leg"))
+
+# Verify
+glimpse(prot_model)
+prot_model %>% count(age_grp, condition)
+
+prot_model %>%
+  filter(age_grp == "old") %>%
+  count(allocation)
+
+# QC checks run during cleaning:
+# prot_agg %>% filter(!is.na(flag))        # identified 4.1 (high_cv) and 23.3 (high_cv)
+# prot_dat %>% filter(sample == "23.3")    # confirmed D09 as outlier well (7.78)
+# prot_model %>% filter(is.na(baseline_conc)) # confirmed 3084 missing baseline
+
+```
+
+
+```{r, model}
+
+
+#--- Set-up for modelling ------------------------------------------------------
+
+# Since the pre value isnt leg-specific in a meaningful sense (assuming symmetry), this data will be treated as a participant-level baseline covariate, detached from the leg assignment and spread to both legs for that participant. Using an ANCOVA-style approach, assigning the single pre value to both legs of a participant and use it as a baseline covariate, then model w3 as the outcome.
+
+# Model 1 — Intervention only: age_grp × condition
+prot_int <- prot_model %>%
+  filter(allocation == "int")
+
+lmm_prot_int <- lmer(protein_conc ~ age_grp * condition + baseline_conc + (1|participant),
+                     data = prot_int)
+summary(lmm_prot_int)
+
+# The results
+# - No significant age × condition interaction (p = 0.132)
+# - No main effect of condition (p = 0.209) — protein concentration did not differ between low and moderate volume at w3
+# - No main effect of age group (p = 0.954)
+# - Baseline concentration did not predict w3 values (p = 0.214)
+# - Note: singular fit — participant random effect variance = 0; model behaved as ANCOVA
+
+# Model 1 — intervention: condition × age_grp means
+emm_prot_int <- emmeans(lmm_prot_int, ~ condition * age_grp)
+emm_prot_int
+
+saveRDS(emm_prot_int, ("./data/data-gen/emm_prot_int.rds"))
+
+# Model 2 — Old intervention vs old control
+prot_old <- prot_model %>%
+  filter(age_grp == "old")
+
+lmm_prot_old <- lmer(protein_conc ~ allocation + baseline_conc + (1|participant),
+                     data = prot_old)
+summary(lmm_prot_old)
+
+# The results
+# - No effect of allocation (p = 0.589) — old intervention participants did not differ from controls at w3
+# - Baseline did not predict w3 (p = 0.647)
+
+# Model 2 — old int vs con
+emm_prot_old <- emmeans(lmm_prot_old, ~ allocation)
+emm_prot_old
+
+saveRDS(emm_prot_old, ("./data/data-gen/emm_prot_old.rds"))
+
+
+```
+
+Overall: No evidence of a training effect on skeletal muscle protein concentration at week 3, in either age group or relative to untrained controls. Estimates were tightly clustered (~3.7–4.1 across all groups) with overlapping confidence intervals throughout.

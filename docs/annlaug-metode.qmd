@@ -1,0 +1,146 @@
+---
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+# Metode
+
+## Design
+
+For å undersøke effekten av styrketrening med ulikt volum på muskelkvaliteten i underkroppen hos eldre har studien blitt designet som et randomisert, kontrollert, innad-deltakere forsøk. Det vil si at deltakerne ble randomisert til enten intervensjonsgruppe eller kontrollgruppe, hvor intervensjonsgruppen fikk tilfeldig tildelt hvilket bein som skal trene styrketrening med lav, respektive moderat volum. Effekten av intervensjonen ble vurdert ved å sammenligne både innad i deltakere (effekt av volum) og mellom grupper (kontroll sammenlignet med intervensjonsgruppe, effekt av styrketrening).
+
+## Deltakere
+
+Deltakere ble rekruttert via lokale og sosiale medier i Lillehammer kommune og på Høgskolen i Innlandet, campus Lillehammer. Totalt ble det rekruttert 49 eldre deltakere; 21 kvinner og 28 menn. Hvorav 39 ble med i intervensjonsgruppa og 10 i kontrollgruppa. I intervensjonsgruppen var det 14 kvinner og 25 menn, og i kontrollgruppen var det 7 kvinner og 3 menn. Studiens og intervensjonens innhold ble gjennomgått nøye før deltakerne fikk bestemme om å være med i studien eller ikke. Dersom de ønsket å være med i studien skrev deltakerne under på informert skriftlig og muntlig samtykke. Deltakerne kunne droppe ut når de vil uten at det ble stilt noen spørsmål. De fikk også tilgang til egne testdata ved forespørsel. For å kunne delta i studien måtte deltakerne være mer enn 70 år. Deltakerne ble ekskludert hvis de ikke møtte inklusjonskriterier, hadde trent mer enn en styrketrening i uka eller trent mer enn 3 utholdenhetsøkter i uka de siste 6 månedene. Deltakere som hadde en ustabil kardiovaskulær sykdom, en sykdom eller skade som sett en stoppe for styrketrening, en alvorlig mental sykdom eller var allergisk til lokalbedøvelse, ble ekskludert fra studien. Se oversikt over deltakere i @tbl-deltakere.
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+#| label: tbl-deltakere
+#| tbl-cap: "Beskrivenede statistikk av deltakere i studien."
+#| tbl-subcap : "Deltakere i studien"
+
+
+
+#utregning mean og sd på alder, høyde, vekt.
+library(tidyverse); library(gt); library(reliefdata)
+
+relief_participants_old <- relief_participants %>%
+  mutate(age.grp = if_else(age > 50, "old", "young")) %>%
+  filter(age.grp != "young") 
+
+summary_data <- relief_participants_old %>% 
+  group_by(allocation, sex) %>%
+  summarise(mean_age = mean(age),
+            sd_age = sd(age),
+            mean_height = mean(height),
+            sd_height = sd(height),
+            mean_weight = mean(weight),
+            sd_weight = sd(weight), 
+            n = n())
+
+spread_data <- summary_data %>%
+  select(-n) %>%
+  pivot_longer(cols = -c(allocation,sex)) %>%
+  mutate(name = str_replace(name, "mean_", "mean_"),
+         name = str_replace(name, "sd_", "sd_")) %>%
+  pivot_wider(names_from = allocation, values_from = value) %>% 
+  
+    separate(name, into = c("stat", "var"), sep = "_") %>%
+  pivot_longer(cols = con:int, 
+               names_to = "grp", 
+               values_to = "value") %>%
+  pivot_wider(names_from = stat, values_from = value) %>%
+  
+  mutate(stat = paste0(round(mean, 1), " (", round(sd, 1), ")" )) %>%
+  
+  select(sex, var,grp,stat) %>%
+  
+  pivot_wider(names_from = grp, values_from = stat) 
+
+# antall kontroll og intervensjon
+n.kontroll <- sum(relief_participants_old$allocation == "con")
+n.intervensjon <- sum(relief_participants_old$allocation == "int")
+
+# Hvordan lagre tall
+# saveRDS(n.kontroll, "data-rds/n.kontroll.RDS")
+
+# n.kontroll <- readRDS("data-rds/n.kontroll.RDS")
+
+
+
+# lage tabell
+spread_data %>%
+  ## ø æ og å kan være utfordrende å få med i tabell 
+  # bruk html-kode for å få med disse, søk "ø html entity" 
+  # og bruk bruk Dec eks: &#216; for Ø
+  mutate(var = if_else(var == "age", "Alder(&aring;r)", 
+                       if_else(var == "height", "H&#248;yde(cm)", "Vekt(kg)")),
+         sex = if_else(sex == "female", "Kvinne", "Mann")) %>%
+  select(var,sex,con,int) %>%
+  gt() %>%
+  
+  # Bruk variablene du har skapt over. Tallene blir oppdatert når/hvis 
+  # dataene forandres
+  cols_label(sex = md("Kj&#248;nn"),
+             var = " ",  # Mulig du ønsker å endre dette ##
+             int = paste0("Intervensjon (n = ", n.intervensjon, ")"),
+             con = paste0("Kontroll (n = ", n.kontroll, ")"))  %>%
+  # Formater kolonner 
+  fmt_markdown(columns = c(var)) %>%
+
+  tab_footnote(
+    footnote = "Data er presentert som gjennomsnitt (SD).") 
+
+  
+  
+  
+```
+
+## Studieoversikt
+
+Studien inneholdt en 12 ukers intervensjon bestående av styrketrening, hvor alle deltakerne vil utføre det samme fullkropps programmet. Under- og overkroppsøvelser vil foregå unilateralt, der et bein og en arm utfører trening med lavt volum og det andre beinet og den andre armen utfører trening med moderat volum. Hvilket bein og arm som får lavt volum og hvilken som får moderat volum er randomisert fordelt. I denne masterstudien ble kun tester og målinger av underkropp tatt med til videre analyse.
+
+Testingene ble utført likt for deltakerne i intervensjonsgruppen og kontrollgruppen. Effektene av intervensjonen, helse relaterte variabler, muskelmasse og muskelstyrke ble målt på tre tidspunkt. De første målinge av styrke og muskelmasse var før intervensjonen (uke 0), neste måling i uke 6, var bare styretester og den siste målingen var etter intervensjonens slutt (uke 12) og besto av styrketester og muskelmasse måling. I denne maststudien ble styrketestene i uke 0 og 12 tatt med til videre analyse. Testene ble fordelt på to dager hvor testdag 1 besto av følgende tester; kroppssammensetningsanalyse (DXA), ultralyd, muskelbiopsi, blodprøve og glukosetoleransetest. Deltakerne utføre disse testene fastende. Testdag 2 besto av styrketestene i dynanometeret "Humac", beinpress i "Keiser" og bisepscurl. Det var ikke krav om å møte fastende på testdag 2. Magnetisk resonans bildefremstilling (MR) av underekstrimitetene ble gjennomført på en annen dag, kort tid etter siste testdag, på sykehuset i Lillehammer av sertifisert personell. Se figur 1 for oversikt over tidslinjen for studien.
+
+![Tidslinje over studien, inkludert testing.](images/Tidslinje1.png){fig-align="center"}
+
+Dataene som ble innsamlet etter intervensjonen ga mulighet til å undersøke effekten av styrketrening på muskelkvaliteten i underekstremitetene. Alle prosedyrer er vedtatt ved laberatoriefasiliteten ved Høgskolen i Innladet på campus Lillehammer. Intervensjonen ble utført i samsvar med Helsinki deklarasjonen.
+
+Denne oppgaven er en del av et større forskningsprosjekt kalt «Resistansce training for life -- the efficacy of increasing resistance training volume for improving muscle function, biology, and health in young and elderly (ReLieF). Forskningsprosjektet har foregått over tre år fra 2021 til 2023. «ReLieF» prosjektet tar inn både yngre og eldre deltakere, hvorav de eldre (70+) blir fokusert på i denne oppgaven.
+
+## Protokoll for styrketrening
+
+Styrketreningen ble utført som en helkropps program, bestående av to økter per uke. Oppvarmingen før hver økt var 10 min på spinning sykkel. Hver økt startet med tre underkropps øvelser bestående av beinpress, kne ekstensjon og kne fleksjon i tre forskjellige apparater. Deltakernes posisjonsinnstillinger på apparatene ble notert, slik at deltakerne fikk samme forutsetninger for hver økt. Etter underkroppsøvelsene gjennomførte deltakerne et oppvarmingsett med valgt skalering av maks pushups før overkropp øvelsene. Det var tre overkropps øvelser bestående av bryst press, en arms roing og biceps curls med manualer. Alle øvelsene ble utført unilateralt, hvor den ene armen og beinet utførte lavt volum (et sett med 10 repetisjoner maksimum \[RM\] per øvelse) og den andre armen og beinet utførte moderat volum (tre sett med 10RM per øvelse). Deltakerne måtte holde seg mellom 8 til 12 repetisjoner på hver øvelse. Dersom deltaker klarte 12 eller mer repetisjoner ble vekten økt til de klarte minst 8 repetisjoner. Deltakerne startet med to sett med det beinet eller armen som hadde fått tildelt moderat volum. Deretter et sett med det beinet eller armen som hadde fått tildelt lavt volum, etterfulgt av det resterende siste settet på moderat volum. Det var 1 minutt pause mellom hvert sett og 2 minutt pause mellom hver øvelse. Treningsvolum og treningsbelastning ble skrevet ned underveis og økte gradvis utover intervensjonen i samsvar med deltakernes fysiske prestasjon under treningsøktene. Opplært personell var til stede under alle øktene.
+
+## Analysemetoder
+
+### Muskelstyrke
+
+For å sikre påliteligheten av dataene fra muskelstyrke testene, ble deltakerne bedt om å ikke trene to dager før testene. Deltakerne ble i tillegg på forhånd kjent med testene før selve testdagene, for å unngå en eventuell læringseffekt. For å standardisere sittestilling og posisjoner under testene ble alle individuelle posisjonene funnet og skrevet ned ved tilvenningstestene i forkant av intervensjonen. Testing av muskelstyrke på underekstremitetene ble utført på tre tidspunkt i intervensjonen. Henviser til figur 1 for tidslinje av alle testene. Alle tester ble utført unilateralt, og alle tester begynte med høyre bein. På hver testdag ble isometriske målinger gjort to ganger, hvor den høyeste verdien ble tatt med videre til den endelige analysen. Alle styrketester ble gjort to separate ganger før intervensjonen, to ganger midt i intervensjonen og to ganger etter intervensjonens slutt. Det forsøket per hastighet med høyest peak tourque verdier per tidspunkt ble tatt med til videre analyse.
+
+Testing av maksimal unilateral isokinetisk ekstensjon (60°, 120° og 240° sek<sup>-1</sup>) og maksimal isometrisk ekstensjon (60° i kneleddet) på underekstremiteten ble gjennomført ved bruk av dynamometet Humac Norm (CSMi, Stoughton, Massachusetts, USA). Isokinetisk peak torque ble målt fra 90° til 0° i kneleddet, hvor utstrakt kne var satt til 0°. Vinkelhastighetene var 60°, 120° og 240° sek<sup>-1</sup> . Det ble utført tre repetisjoner to ganger per hastighet, hvor første sett var oppvarming. Mellom testene med samme hastighet var det hvile i 30 sekunder, og mellom testene med ulik hastighet var det hvile i 1 minutt. Isometrisk kne ekstensjon peak torque ble målt tre ganger i 60° vinkel i maksimalt 10 sekunder, hvor første forsøk var oppvarming. Den isometriske testen ble avsluttet når deltakerne oppnådde et platå eller nedgang i kraft, noe som vanligvis skjer etter 2-4 sekunder. Det var 1 minutt pause mellom hvert forsøk på den isometriske testen.
+
+### Muskelmasse
+
+For å kunne analysere MR bildene og undersøke eventuelle endringer i muskelmasse må underhudsfett, intramuskulært fett og bindevev, bein og muskelmasse bli skilt fra hverandre. Dette ble gjort i et program kalt Slicer v.4.11.2 (Slicer Community Revision, 2022). Begge lårene ble analysert samtidig og bildeanalysen ble avgrenset til 20% av lengden på femur fra kneskåla og 30% av lengden på femur fra trocantor major. Den beregnede lengden på femur resulterte i ca. 20 tverrsnittbilder per person der annenhvert bilde ble manuelt tegnet på. På hvert bilde ble det det markert og skilt mager masse og fett ved hjelp av filter satt fra 250 volumintesitet. De resterende bildene ble automatisk analysert ut ifra filter som ble laget under den manuelle analysen av programmet, og ble deretter videre perfeksjonert manuelt. Bildene ble satt sammen til en 3D modell som målte muskelvolumet. Analysens resultater ble tatt ut i cm<sup>3</sup> for videre analyse.
+
+![3D bilde av quadriceps hentet ut fra Slicer.](images/Tverrsnitt1.png){fig-align="center"}
+
+![Bilde av tverrsnitt, hentet ut fra Slicer.](images/Tverrsnitt2.png){fig-align="center"}
+
+Utregningen av muskelkvalitet var Nm • maks(Nm)-1 • cm<sup>3</sup> av quadtriceps, hvor styrken var et gjennomsnitt av isokinetisk og isometrisk peak torque fra dynamometer.
+
+## Databehandling og statistikk
+
+I denne studien er all beskrivende data presentert som gjennomsnitt og standardavvik (sd). Resultater fra statistiske tester er presentert med gjennomsnittlig effekt, 95% konfidensintervaller og p-verdier. Resultatene ble ansett som signifikant når p-verdien var < 0.05. Konfidensintervall ble brukt for å gi et bilde av en trolig variasjonsbredde for verdien på de estimerte parametrene. Resultatene ble også utarbeidet til prosent endring fra pre til post ut i fra gjennomsnitt. Det ble tatt i bruk en ANCOVA modell (analysis of co-variance) i analysene av muskelkvalitet, muskelmasse og muskelstyrke. ANCOVA ble brukt for å kunne sammenligne en avhengig variabel (post-intervensjonsverider) mellom grupper/treningsvolum samtidig som pre-intervensjonsverdier ble brukt som kovariat. ANCOVA er en blanding mellom en regresjonsmodell og ANOVA, og består av både numeriske og kategoriske variabler.
+
+For analyse av muskelvolum ble det hentet ut verdier fra muskelmasse og ikke-muskulært vev fra MR analysen. Det ble først gjort et gjennomsnitt i pre og post i alle gruppene (kontroll, lav, mod). Deretter, ved hjelp av ANCOVA modellen, kunne alle gruppene sammenlignes i en modell som gir gruppeforskjeller fra samme utgangspunkt. 
+
+For analyse av muskelstyrke ble det brukt et datasett hvor styrken ble registrert som maksimal peak tourqe (pt) per hastighet, deltaker og tidspunkt. Deretter ble dataene transformert til en skala fra 0-1 ved at styrkeverdier ble delt på den høyeste verdien av pt per hastighet av alle deltakerne. Til slutt ble det beregnet et gjennomsnitt av alle de ulike hastighetene per deltaker og tidspunkt. Analysen av muskelstyrke ble også gjort med en ANCOVA modell, hvor post-verdier i de ulike gruppene ble sammenlignet ut i fra samme utgangspunkt (kontrollert for pre).
+
+Analyse av muskelkvalitet ble også gjort med en ANCOVA modell. MR- og styrkedatasettene ble kombinert for å kunne gjøre videre analyse. Styrkeresultatene ble delt på muskelmasseresultatene fra tidligere analyser i hver deltaker for å skape et muskelkvalitetsindeks.
+
+Rådataene ble samlet inn i excel og overført til R-studio for videre analyse ved hjelp av en R-datapakke, designet for å gjøre analysene mer produserbare. Datapakkene `reLiefdata` finnes på github; <https://github.com/trainome/reliefdata.git>. Datapakken ble skapt av alle aktive medarbeider i prosjektet og ble opprettet for å videre kunne bli bearbeidet individuelt for de involverte i prosjektet. Denne masterstudien er skrevet i quarto som tilater reproduserbare analyser. Masterstudiens data og kod finnes på github; <https://github.com/Annlaugs/Ma-relief-muskelkvalitet.git>.

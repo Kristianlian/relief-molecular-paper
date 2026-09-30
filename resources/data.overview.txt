@@ -1,0 +1,17 @@
+Overview of data generated from RNA and UL cleanup
+
+
+RNA DATA
+
+rna.dat.RDS = total rna data with participant, leg, condition (vol), allocation (intervention/control), time, weight (biopsy), purity (260/280), sample name, age.grp. Samples with no data have been filtered out, but I have not filtered based on purity yet
+
+rna.logchange.RDS = uses rna.dat.RDS to calculate the change in total RNA from pre to week 3 (w3), and pre to post, with logtransformed data.
+
+
+Ultrasound DATA
+
+ul.dat.RDS = ultrasound data with participant, leg, time, age.grp, allocation (intervention/control), condition (vol), VLthick (vastus lateralis thickness per time/leg/participant), VIthick (vastus intermedius thickness per time/leg/participant).
+
+vl.logchange.RDS = uses ul.dat.RDS to calculate the change in vastus lateralis thickness from pre to mid, and pre to post, with log transformed data.
+
+vi.logchange.RDS = uses ul.dat.RDS to calculate the change in vastus intermedius thickness from pre to mid, and pre to post, with log transformed data.
