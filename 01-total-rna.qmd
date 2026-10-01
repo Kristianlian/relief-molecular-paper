@@ -1,0 +1,808 @@
+---
+title: "Total RNA analysis"
+format: html
+editor: source
+editor_options: 
+  chunk_output_type: console
+---
+
+
+```{r}
+#| label: packages-and-settings
+#| eval: true
+#| message: false
+#| warning: false
+#| echo: true
+
+# Loading packages
+library(brms)
+library(marginaleffects)
+library(tidyverse)
+library(reliefdata)
+
+
+# This setting disables a safety warning message for the marginaleffects package
+# we should still confirm the order of effects for the contrasts
+options(marginaleffects_safe = FALSE)
+
+
+```
+
+### Total RNA
+
+Total RNA was extracted via the trizol protocol, and measured with the NanoDrop spectrophotometry. Biopsies were sampled before, 3 weeks/6 sessions into the intervention, and after the intervetion. Samples were run with 4 replicates on the spectrophotometer, to estimate the rna concentration. 
+
+With this data, we are interested in estimating:
+
+1.  Within condition (low- and moderate-volume, and non-training control conditions) change from baseline.
+2.  Differences between age-groups at baseline.
+3.  Average between age-group differences in change from baseline (young vs. old in the intervention group)
+4.  Average between control- vs. intervention-group changes from baseline.
+5.  Average effect of condition in the intervention groups (low- vs. moderate volume)
+6.  Differences between age-groups in effect of condition.
+
+
+#### Data -The relationship between total RNA and mg tissue
+
+In practice, weighing small tissue pieces carries real measurement error, which is amplified when dividing by small mg values — potentially contributing to the sampling instability seen
+in the UBF and c-Myc models. Rather than pre-computing a fixed ratio, we model the relationship between measured RNA and mg weight directly (on the log-log scale, consistent with the project's existing log + standardization convention). The aim is to let the mg-RNA
+relationship be estimated from the data rather than assumed, which should:
+
+- allow uncertainty to scale appropriately for extreme mg observations,
+  rather than being artificially inflated or deflated by the ratio, and
+- yield more precise estimates in the well-populated middle of the mg
+  distribution, where the fixed-ratio approach was not actually using the
+  available information efficiently.
+
+```{r}
+
+# Data
+
+conc.dat <- reliefdata::relief_rnaconc |> 
+  mutate(participant = as.character(participant)) |> 
+  mutate(participant = ifelse(is.na(participant), "blank", participant),
+         leg = ifelse(is.na(leg), "blank", leg),
+         time = ifelse(is.na(time), "blank", time),
+         weight = ifelse(is.na(weight), "0", weight)) |> 
+  mutate(total.rna = conc * 4 * 25) |> 
+  dplyr::select(participant, leg, time, weight, well, plate, sample, total.rna) |> 
+  filter(participant != "blank") |> 
+  mutate(weight = as.numeric(weight)) |> 
+  print()
+
+condition <- reliefdata::relief_volume |> 
+  mutate(participant = as.character(participant))
+
+participants <- reliefdata::relief_participants |> 
+  mutate(age_group = if_else(age < 40, "yng", "old")) |> 
+  dplyr::select(participant, age, sex, height, bodyweight = weight, allocation, age_group)
+
+
+rna.dat <- conc.dat |> 
+  full_join(condition) |> 
+  select(-arm) |> 
+  full_join(participants) |> 
+  group_by(participant, leg, time, age_group, allocation, condition, sex) |> 
+  summarise(
+    mean_rna = mean(total.rna, na.rm = TRUE), # average technical replicates (conc side)
+    weight = first(weight)                    # one weight measurement per sample
+  ) |> 
+  ungroup() |> 
+  mutate(
+    y     = log(mean_rna),
+    ystd  = (y - mean(y, na.rm = TRUE)) / sd(y, na.rm = TRUE),
+    mg    = log(weight),
+    mgstd = (mg - mean(mg, na.rm = TRUE)) / sd(mg, na.rm = TRUE),
+    condition = if_else(allocation == "con", "con", condition),
+    tx = paste0(allocation, "_", age_group, "_", condition),
+    tx = factor(tx, levels = c("int_old_low","int_old_mod", "int_yng_low","int_yng_mod", "con_old_con")),
+    tx_sex = paste0(tx, "_", sex),
+    tx_sex = factor(tx_sex, levels = c(
+      "int_old_low_female", "int_old_low_male",
+      "int_old_mod_female", "int_old_mod_male", 
+      "int_yng_low_female", "int_yng_low_male",
+      "int_yng_mod_female", "int_yng_mod_male", 
+      "con_old_con_female", "con_old_con_male"
+    )),
+    time = factor(time, levels = c("pre", "w3", "post")),
+    sex_centered = if_else(sex == "female", -0.5, 0.5)
+  ) |> 
+  filter(!is.na(y)) |> 
+  filter(!is.na(mg)) |> 
+  filter(!is.na(time)) |> 
+  print()
+    
+# Checking for mg = 0, which would produce inf
+#sum(is.infinite(rna.dat$mg))
+# zero
+  
+
+## Save sd and mean for back transformation
+mean_rna <- mean(rna.dat$y, na.rm = TRUE)
+sd_rna <- sd(rna.dat$y, na.rm = TRUE)
+mean_mg <- mean(rna.dat$mg, na.rm = TRUE)
+sd_mg <- sd(rna.dat$mg, na.rm = TRUE)
+
+# A preliminary figure of observed data
+# RNA plotted against weight - the relationship to be estimated in the moodel
+
+rna_mg_plot <- rna.dat %>% 
+  ggplot(aes(weight, mean_rna, color = time)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", se = FALSE) +
+  scale_x_log10() +
+  scale_y_log10() +
+  labs(x = "Tissue weight (mg, log scale)", 
+       y = "Total RNA (ng, log scale)")
+
+
+rna.dat %>% 
+  ggplot(aes(mgstd, ystd, color = time)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", se = FALSE) +
+
+  labs(x = "Tissue weight (mg, log scale, standardized)", 
+       y = "Total RNA (ng, log scale, standardized)")
+
+
+
+## Data for model 4
+# Model 4 will have a random intercept per biopsy replicate, so Im making a separate data frame here without summarising to mean_rna per biopsy.
+
+
+rna_rep.dat <- conc.dat |> 
+  full_join(condition) |> 
+  select(-arm) |> 
+  full_join(participants) |> 
+  mutate(
+    y     = log(total.rna),
+    ystd  = (y - mean(y, na.rm = TRUE)) / sd(y, na.rm = TRUE),
+    mg    = log(weight),
+    mgstd = (mg - mean(mg, na.rm = TRUE)) / sd(mg, na.rm = TRUE),
+    condition = if_else(allocation == "con", "con", condition),
+    tx = paste0(allocation, "_", age_group, "_", condition),
+    tx = factor(tx, levels = c("int_old_low","int_old_mod", "int_yng_low","int_yng_mod", "con_old_con")),
+    tx_sex = paste0(tx, "_", sex),
+    tx_sex = factor(tx_sex, levels = c(
+      "int_old_low_female", "int_old_low_male",
+      "int_old_mod_female", "int_old_mod_male", 
+      "int_yng_low_female", "int_yng_low_male",
+      "int_yng_mod_female", "int_yng_mod_male", 
+      "con_old_con_female", "con_old_con_male"
+    )),
+    time = factor(time, levels = c("pre", "w3", "post")),
+    sex_centered = if_else(sex == "female", -0.5, 0.5)
+  ) |> 
+  filter(!is.na(y)) |> 
+  filter(!is.na(mg)) |> 
+  filter(!is.na(time)) |> 
+  print()
+
+mean_rna_rep <- mean(rna_rep.dat$y, na.rm = TRUE)
+sd_rna_rep   <- sd(rna_rep.dat$y, na.rm = TRUE)
+mean_mg_rep  <- mean(rna_rep.dat$mg, na.rm = TRUE)
+sd_mg_rep    <- sd(rna_rep.dat$mg, na.rm = TRUE)
+
+```
+
+#### Models
+
+```{r}
+# Setting up formulas
+form0 <- bf(ystd ~ mgstd) 
+# No grouping, a clean look at the relationship
+
+form1 <- bf(ystd ~ mgstd + (1|participant)) 
+# Now adding a random intercept for participant, to account for repeated measures
+# this also means that the model now separates between-participant variance (sd(Intercept)) from residual variance(sigma), i.e., sigma should drop compared to m0.
+
+form2 <- bf(ystd ~ mgstd + tx + time + (1|participant))
+# this model has tx and time added, to also explore age, allocation and time effects on the relationship between RNA yield and mg. The initial idea was to only check age and time, but using age_group here would collapse int_old and con_old, which should stay separate. "tx" fixes that, but also adds the allocation and condition. An alternative would be to create a new factor that includes only age group and allocation (int_young, int_old, con_old). Written as is, this model is additive, and tests "does group shift RNA level" and "does time shift RNA level".
+
+# What model 2 cannot tell us, is whether the time trajectory itself differs by group - does the control group's RNA stay flat across time while interventions group rise? We can test this by adding tx:time. Probably also time to expand the random effects, with time and tx in the model. Adding time lets each participant's time trajectory vary, and one for leg lets the model capture if a person's low-volume leg runs differently from the moderate-volume leg.
+
+form3 <- bf(ystd ~ mgstd + tx * time + (1 + time | participant) + (1 | participant:leg))
+
+form4 <- bf(ystd ~ mgstd + tx * time + (1 + time | participant) + (1 | participant:leg) + 
+  (1|participant:sample))
+
+# This model expands on m3, adding (1|participant:sample). Using participant:sample here instead of "just" sample, for the nesting structure to be explicit and self-documented (i.e., "sample nested within participant").
+
+# Priors
+get_prior(form0, data = rna.dat)
+get_prior(form1, data = rna.dat)
+get_prior(form2, data = rna.dat)
+get_prior(form3, data = rna.dat)
+get_prior(form4, data = rna_rep.dat)
+
+
+pri0 <- c(
+  prior(normal(0, 1), class = "Intercept"),
+  prior(normal(1, 1), class = "b", coef = "mgstd"),
+  prior(exponential(1), class = "sigma")
+) 
+# since both ystd and mgstd are standardized (mean 0, SD 1), a normal(0, 1) prior on the slope is a reasonable weakly-informative choice - meaning "we don't strongly expect the standardized slope to exceed roughly ±2"
+
+# Intercept normal(0, 1) - since ystd is standardized (mean 0), the intercept represents predicted ystd when mgstd = 0 (i.e., at average log-mg). We'd expect this to be close to 0 if mg fully explains the centering, so a weakly-informative prior centered at 0 is sensible, consistent with how we've set priors in previous brms
+
+# b for mgstd, normal(0, 1) - same logic as before: standardized slope, so ±2 SD as a generous plausible range
+
+# sigma, exponential(1) - matches our convention in prior brms work
+
+
+pri1 <- c(
+  prior(normal(0, 1), class = "Intercept"),
+  prior(normal(0, 1), class = "b", coef = "mgstd"),
+  prior(exponential(1), class = "sd", group = "participant"),
+  prior(exponential(1), class = "sigma")
+)
+
+# sd gets added as a variance component for participant
+
+
+
+pri2 <- c(
+  prior(normal(0, 1), class = "Intercept"),
+  prior(normal(0, 1), class = "b", coef = "mgstd"),
+  prior(normal(0, 1), class = "b", coef = "timew3"),
+  prior(normal(0, 1), class = "b", coef = "timepost"),
+  prior(normal(0, 1), class = "b", coef = "txcon_old_con"),
+  prior(normal(0, 1), class = "b", coef = "txint_old_mod"),
+  prior(normal(0, 1), class = "b", coef = "txint_yng_low"),
+  prior(normal(0, 1), class = "b", coef = "txint_yng_mod"),
+  prior(exponential(1), class = "sd", group = "participant"),
+  prior(exponential(1), class = "sigma")
+)
+
+# the reference level here is int_old_low (absorbed into the intercept), since its the first level in the tx factor order. So the intercept now represents predicted ystd for an int_old_low participant at time = pre (pre being the reference level of time) and average mg. Each tx coefficient is then a shift relative to int_old_low, and con_olc_con specifically gives the intervention-vs-control directly as a single coefficient.
+
+# currently no pred/contr functions, since none of the models has any interactions, they're all single coefficients with e.g. int_old_low/pre (m2) as the reference. 
+
+
+
+pri3 <- c(
+  prior(normal(0, 1), class = "Intercept"),
+  prior(normal(1, 1), class = "b", coef = "mgstd"),
+  prior(normal(0, 1), class = "b", coef = "timew3"),
+  prior(normal(0, 1), class = "b", coef = "timepost"),
+  prior(normal(0, 1), class = "b", coef = "txcon_old_con"),
+  prior(normal(0, 1), class = "b", coef = "txint_old_mod"),
+  prior(normal(0, 1), class = "b", coef = "txint_yng_low"),
+  prior(normal(0, 1), class = "b", coef = "txint_yng_mod"),
+  prior(normal(0, 1), class = "b", coef = "txcon_old_con:timew3"),
+  prior(normal(0, 1), class = "b", coef = "txcon_old_con:timepost"),
+  prior(normal(0, 1), class = "b", coef = "txint_old_mod:timew3"),
+  prior(normal(0, 1), class = "b", coef = "txint_old_mod:timepost"),
+  prior(normal(0, 1), class = "b", coef = "txint_yng_low:timew3"),
+  prior(normal(0, 1), class = "b", coef = "txint_yng_low:timepost"),
+  prior(normal(0, 1), class = "b", coef = "txint_yng_mod:timew3"),
+  prior(normal(0, 1), class = "b", coef = "txint_yng_mod:timepost"),
+  prior(lkj(2), class = "cor", group = "participant"),
+  prior(exponential(1), class = "sd", group = "participant"),
+  prior(exponential(1), class = "sd", group = "participant:leg"),
+  prior(exponential(1), class = "sigma")
+)
+
+
+pri4 <- c(
+  prior(normal(0, 1), class = "Intercept"),
+  prior(normal(1, 1), class = "b", coef = "mgstd"),  
+  prior(normal(0, 1), class = "b", coef = "timew3"),
+  prior(normal(0, 1), class = "b", coef = "timepost"),
+  prior(normal(0, 1), class = "b", coef = "txcon_old_con"),
+  prior(normal(0, 1), class = "b", coef = "txint_old_mod"),
+  prior(normal(0, 1), class = "b", coef = "txint_yng_low"),
+  prior(normal(0, 1), class = "b", coef = "txint_yng_mod"),
+  prior(normal(0, 1), class = "b", coef = "txcon_old_con:timew3"),
+  prior(normal(0, 1), class = "b", coef = "txcon_old_con:timepost"),
+  prior(normal(0, 1), class = "b", coef = "txint_old_mod:timew3"),
+  prior(normal(0, 1), class = "b", coef = "txint_old_mod:timepost"),
+  prior(normal(0, 1), class = "b", coef = "txint_yng_low:timew3"),
+  prior(normal(0, 1), class = "b", coef = "txint_yng_low:timepost"),
+  prior(normal(0, 1), class = "b", coef = "txint_yng_mod:timew3"),
+  prior(normal(0, 1), class = "b", coef = "txint_yng_mod:timepost"),
+  prior(lkj(2), class = "cor", group = "participant"),
+  prior(exponential(1), class = "sd", group = "participant"),
+  prior(exponential(1), class = "sd", group = "participant:leg"),
+  prior(exponential(1), class = "sd", group = "participant:sample"),
+  prior(exponential(1), class = "sigma")
+)
+
+
+
+# adding lkj(2) for the correlation matrix between participant-level random intercept/slopes
+
+
+m0.pp <- brm(form0,
+             prior = pri0,
+             data = rna.dat,
+             file = "fits/01-total-rna/m0.pp",
+             file_refit = "on_change",
+             sample_prior = "only")
+#pp_check(m0.pp, ndraws = 100)
+
+# Prior predictive simulation 
+as_draws_df(m0.pp) |> 
+  filter(.draw %in% 1:100) |> 
+  expand_grid(mgstd = seq(from = -3, to = 3, by = 0.2)) |> 
+  # predict
+  mutate(y = b_Intercept + b_mgstd * mgstd) |> 
+  ggplot(aes(mgstd, y, group = .draw)) + 
+  geom_line(alpha = 0.2) +
+  
+  geom_point(data = rna.dat, 
+             aes(mgstd, ystd, group = NULL))
+  
+ 
+# Update model to the posterior
+
+m0.post <- update(m0.pp,
+                  sample_prior = "no",
+                  iter = 4000,
+                  file = "fits/01-total-rna/m0.post",
+                  file_refit = "on_change")
+
+# Posterior predictive simulation 
+as_draws_df(m0.post) |> 
+  filter(.draw %in% 1:100) |> 
+  expand_grid(mgstd = seq(from = -4, to = 3, by = 0.5)) |> 
+  # predict
+  mutate(y = b_Intercept + b_mgstd * mgstd) |> 
+  ggplot(aes(mgstd, y, group = .draw)) + 
+  geom_line(alpha = 0.2) +
+  
+  geom_point(data = rna.dat, 
+             aes(mgstd, ystd, group = NULL))
+
+
+
+  
+
+
+
+m1.pp <- brm(form1,
+             prior = pri1,
+             data = rna.dat,
+             file = "fits/01-total-rna/m1.pp",
+             file_refit = "on_change",
+             sample_prior = "only")
+#pp_check(m1.pp, ndraws = 100)
+
+as_draws_df(m1.pp) |> 
+  filter(.draw %in% 1:100) |> 
+  expand_grid(mgstd = seq(from = -3, to = 3, by = 0.2)) |> 
+  # predict
+  mutate(y = b_Intercept + b_mgstd * mgstd) |> 
+  ggplot(aes(mgstd, y, group = .draw)) + 
+  geom_line(alpha = 0.2) +
+  
+  geom_point(data = rna.dat, 
+             aes(mgstd, ystd, group = NULL))
+
+
+
+
+
+m2.pp <- brm(form2,
+             prior = pri2,
+             data = rna.dat,
+             file = "fits/01-total-rna/m2.pp",
+             file_refit = "on_change",
+             sample_prior = "only")
+#pp_check(m2.pp, ndraws = 100)
+
+
+m3.pp <- brm(form3,
+             prior = pri3,
+             data = rna.dat,
+             file = "fits/01-total-rna/m3.pp",
+             file_refit = "on_change",
+             sample_prior = "only")
+#pp_check(m3.pp, ndraws = 100)
+
+
+
+m4.pp <- brm(form4,
+             prior = pri4,
+             data = rna_rep.dat,
+             file = "fits/01-total-rna/m4.pp",
+             file_refit = "on_change",
+             sample_prior = "only")
+
+
+```
+
+```{r}
+### Posteriors
+
+## Model 3
+
+pred <- predictions(
+    m3.pp,
+    type = "prediction",
+    newdata = datagrid(tx = unique,
+                        time = unique),
+    ndraws = 1000) 
+
+
+
+prior <- get_draws(pred) |> 
+  dplyr::select(drawid, draw, participant, tx, time) |> 
+  mutate(fit = "prior")
+
+
+
+
+m3.post <- update(m3.pp,
+                   sample_prior = "no",
+                   cores = 4,
+                   control = list(adapt_delta = 0.95,
+                                  max_treedepth = 15),
+                   iter = 4000,
+                   file = "fits/01-total-rna/m3.post",
+                   file_refit = "on_change")
+
+pp_check(m3.post, ndraws = 100)
+
+pred.post <- predictions(
+    m3.post,
+    type = "prediction",
+    newdata = datagrid(tx = unique,
+                        time = unique),
+    ndraws = 4000) 
+
+
+post <- get_draws(pred.post) |> 
+  dplyr::select(drawid, draw, participant, tx, time) |> 
+  mutate(fit = "posterior")
+
+bind_rows(prior, 
+          post) |> 
+  ggplot(aes(draw, color = fit)) + 
+  geom_line(stat = "density") +
+  facet_wrap(tx ~ time)
+
+
+
+# Generate predictions (swapping from type = "predictions" to "response")
+pred.post <- predictions(
+    m3.post,
+    type = "response",   
+    newdata = datagrid(tx = unique,
+                        time = unique),
+    ndraws = 4000)
+
+# Setting up contrasts for plotting
+all_contrasts <- get_draws(pred.post) |> 
+  dplyr::select(drawid, draw, participant, tx, time) |> 
+  mutate(grp = paste0(tx, time)) |> 
+  dplyr::select(-tx, -time) |> 
+  pivot_wider(names_from = grp, values_from = draw) |> 
+  mutate(
+    # Within-group time deltas
+    int_old_low_w3      = int_old_loww3  - int_old_lowpre,
+    int_old_low_post     = int_old_lowpost - int_old_lowpre,
+    int_old_low_w3post   = int_old_lowpost - int_old_loww3,
+    
+    int_old_mod_w3       = int_old_modw3  - int_old_modpre,
+    int_old_mod_post      = int_old_modpost - int_old_modpre,
+    int_old_mod_w3post    = int_old_modpost - int_old_modw3,
+    
+    int_yng_low_w3        = int_yng_loww3  - int_yng_lowpre,
+    int_yng_low_post       = int_yng_lowpost - int_yng_lowpre,
+    int_yng_low_w3post     = int_yng_lowpost - int_yng_loww3,
+    
+    int_yng_mod_w3         = int_yng_modw3  - int_yng_modpre,
+    int_yng_mod_post        = int_yng_modpost - int_yng_modpre,
+    int_yng_mod_w3post      = int_yng_modpost - int_yng_modw3,
+    
+    con_old_con_w3           = con_old_conw3  - con_old_conpre,
+    con_old_con_post          = con_old_conpost - con_old_conpre,
+    con_old_con_w3post        = con_old_conpost - con_old_conw3,
+    
+    # Pooled intervention deltas (NOW that the within-group deltas above exist)
+    int_old_pooled_w3   = (int_old_low_w3 + int_old_mod_w3) / 2,
+    int_old_pooled_post = (int_old_low_post + int_old_mod_post) / 2,
+    int_yng_pooled_w3   = (int_yng_low_w3 + int_yng_mod_w3) / 2,
+    int_yng_pooled_post = (int_yng_low_post + int_yng_mod_post) / 2,
+    
+    # Volume effect diffs (mod vs low), within age group
+    old_mod_vs_low_w3      = int_old_mod_w3 - int_old_low_w3,
+    old_mod_vs_low_post     = int_old_mod_post - int_old_low_post,
+    old_mod_vs_low_w3post   = int_old_mod_w3post - int_old_low_w3post,
+    
+    yng_mod_vs_low_w3       = int_yng_mod_w3 - int_yng_low_w3,
+    yng_mod_vs_low_post      = int_yng_mod_post - int_yng_low_post,
+    yng_mod_vs_low_w3post    = int_yng_mod_w3post - int_yng_low_w3post,
+    
+    # Average group diffs: young vs old (averaging low/mod within age)
+    yng_vs_old_w3         = ((int_yng_low_w3 + int_yng_mod_w3) / 2) - ((int_old_low_w3 + int_old_mod_w3) / 2),
+    yng_vs_old_post         = ((int_yng_low_post + int_yng_mod_post) / 2) - ((int_old_low_post + int_old_mod_post) / 2),
+    yng_vs_old_w3post        = ((int_yng_low_w3post + int_yng_mod_w3post) / 2) - ((int_old_low_w3post + int_old_mod_w3post) / 2),
+    
+    # Old intervention vs control
+    old_vs_con_w3          = ((int_old_low_w3 + int_old_mod_w3) / 2) - con_old_con_w3,
+    old_vs_con_post          = ((int_old_low_post + int_old_mod_post) / 2) - con_old_con_post,
+    old_vs_con_w3post         = ((int_old_low_w3post + int_old_mod_w3post) / 2) - con_old_con_w3post,
+    
+    # Volume effect diffs between age groups
+    yng_vs_old_vol_w3      = yng_mod_vs_low_w3 - old_mod_vs_low_w3,
+    yng_vs_old_vol_post      = yng_mod_vs_low_post - old_mod_vs_low_post,
+    yng_vs_old_vol_w3post     = yng_mod_vs_low_w3post - old_mod_vs_low_w3post
+  ) |> 
+  dplyr::select(drawid, 
+                int_old_low_w3:int_old_low_w3post, int_old_mod_w3:int_old_mod_w3post,
+                int_yng_low_w3:int_yng_low_w3post, int_yng_mod_w3:int_yng_mod_w3post,
+                con_old_con_w3:con_old_con_w3post,
+                int_old_pooled_w3, int_old_pooled_post,
+                int_yng_pooled_w3, int_yng_pooled_post,
+                old_mod_vs_low_w3:old_mod_vs_low_w3post, yng_mod_vs_low_w3:yng_mod_vs_low_w3post,
+                yng_vs_old_w3:yng_vs_old_w3post, old_vs_con_w3:old_vs_con_w3post,
+                yng_vs_old_vol_w3:yng_vs_old_vol_w3post) |> 
+  pivot_longer(names_to = "contrast", values_to = "value", cols = -drawid) |> 
+  mutate(
+    delta = case_when(
+      grepl("w3post$", contrast) ~ "w3 to post",
+      grepl("w3$", contrast) ~ "pre to w3",
+      grepl("post$", contrast) ~ "pre to post"
+    ),
+    contrast_group = case_when(
+      grepl("^int_|^con_old_con", contrast) ~ "within-group",
+      grepl("_mod_vs_low", contrast) ~ "volume effect",
+      grepl("^yng_vs_old_vol", contrast) ~ "volume x age",
+      grepl("^yng_vs_old_w3|^yng_vs_old_post", contrast) ~ "age effect",
+      grepl("^old_vs_con", contrast) ~ "intervention vs control"
+    )
+  )
+
+## Back-transformation for reporting
+# Prior to this back-transformation, the values of ystd and mgstd are log-transformed, mean-centered and sd-standardized - this could indeed be reported as a diff in SD's, but its not very intuitive. Therefore, the below code back-transforms ystd to fold-change. 
+# For within-group deltas (e.g. int_old_low_w3) this is a straightforward "RNA at w3 is fc_est x RNA at pre", e.g. 1.15 = 15% higher
+# For between group/comparison contrasts (e.g., old_vs_con_w3) the value being exponentiated is already a difference of differences (a diff in log-fold-changes), so the resulting fold_change means "the intervention group's fold-change in is fc_est x the control group's fold-change" - a ratio of ratios
+
+all_contrasts_fc <- all_contrasts |> 
+  mutate(fold_change = exp(value * sd_rna))
+
+saveRDS(all_contrasts_fc, "./data/data-gen/rna_mg_contrasts_fc.rds")
+
+contrast_summary <- all_contrasts_fc |> 
+  group_by(contrast, contrast_group, delta) |> 
+  summarise(
+    ystd_est   = median(value),
+    ystd_lower = quantile(value, 0.025),
+    ystd_upper = quantile(value, 0.975),
+    fc_est     = median(fold_change),
+    fc_lower   = quantile(fold_change, 0.025),
+    fc_upper   = quantile(fold_change, 0.975),
+    pos        = sum(fold_change > 1) / n(),   
+    .groups = "drop"
+  ) |> 
+  arrange(contrast_group, contrast, delta)
+
+saveRDS(contrast_summary, "data/data-gen/rna_mg_contrast_summary.rds")
+
+print(contrast_summary, n = 30)
+
+
+
+
+## Model 4
+
+pred_rep <- predictions(
+  m4.pp,
+  type = "prediction",
+  newdata = datagrid(tx = unique,
+                     time = unique),
+  ndraws = 1000)
+
+prior_rep <- get_draws(pred_rep) |> 
+  select(drawid, draw, participant, tx, time) |> 
+  mutate(fit = "prior")
+
+# Fit the posterior
+
+m4.post <- update(m4.pp,
+                  sample_prior = "no",
+                  cores = 4,
+                  control = list(adapt_delta = 0.95,
+                                 max_treedepth = 15),
+                  iter = 4000,
+                  file = "fits/01-total-rna/m4.post",
+                  file_refit = "on_change")
+pp_check(m4.post, ndraws = 100)
+
+
+pred.post_rep <- predictions(
+    m4.post,
+    type = "response",   
+    newdata = datagrid(tx = unique,
+                        time = unique),
+    re_formula = NA,
+    ndraws = 4000)
+
+
+post_rep <- get_draws(pred.post_rep) |> 
+  select(drawid, draw, participant, tx, time) |> 
+  mutate(fit = "posterior")
+
+
+bind_rows(prior_rep, post_rep) |> 
+  ggplot(aes(draw, color = fit)) +
+  geom_line(stat = "density") +
+  facet_wrap(tx ~ time)
+
+
+# Setting up contrasts for plotting
+
+all_contrasts_rep <- get_draws(pred.post_rep) |> 
+  dplyr::select(drawid, draw, participant, tx, time) |> 
+  mutate(grp = paste0(tx, time)) |> 
+  dplyr::select(-tx, -time) |> 
+  pivot_wider(names_from = grp, values_from = draw) |> 
+  mutate(
+    # Within-group time deltas
+    int_old_low_w3      = int_old_loww3  - int_old_lowpre,
+    int_old_low_post     = int_old_lowpost - int_old_lowpre,
+    int_old_low_w3post   = int_old_lowpost - int_old_loww3,
+    
+    int_old_mod_w3       = int_old_modw3  - int_old_modpre,
+    int_old_mod_post      = int_old_modpost - int_old_modpre,
+    int_old_mod_w3post    = int_old_modpost - int_old_modw3,
+    
+    int_yng_low_w3        = int_yng_loww3  - int_yng_lowpre,
+    int_yng_low_post       = int_yng_lowpost - int_yng_lowpre,
+    int_yng_low_w3post     = int_yng_lowpost - int_yng_loww3,
+    
+    int_yng_mod_w3         = int_yng_modw3  - int_yng_modpre,
+    int_yng_mod_post        = int_yng_modpost - int_yng_modpre,
+    int_yng_mod_w3post      = int_yng_modpost - int_yng_modw3,
+    
+    con_old_con_w3           = con_old_conw3  - con_old_conpre,
+    con_old_con_post          = con_old_conpost - con_old_conpre,
+    con_old_con_w3post        = con_old_conpost - con_old_conw3,
+    
+    # Pooled intervention deltas — goes here, after within-group deltas exist
+    int_old_pooled_w3   = (int_old_low_w3 + int_old_mod_w3) / 2,
+    int_old_pooled_post = (int_old_low_post + int_old_mod_post) / 2,
+    int_yng_pooled_w3   = (int_yng_low_w3 + int_yng_mod_w3) / 2,
+    int_yng_pooled_post = (int_yng_low_post + int_yng_mod_post) / 2,
+    
+    # Volume effect diffs (mod vs low), within age group
+    old_mod_vs_low_w3      = int_old_mod_w3 - int_old_low_w3,
+    old_mod_vs_low_post     = int_old_mod_post - int_old_low_post,
+    old_mod_vs_low_w3post   = int_old_mod_w3post - int_old_low_w3post,
+    
+    yng_mod_vs_low_w3       = int_yng_mod_w3 - int_yng_low_w3,
+    yng_mod_vs_low_post      = int_yng_mod_post - int_yng_low_post,
+    yng_mod_vs_low_w3post    = int_yng_mod_w3post - int_yng_low_w3post,
+    
+    # Average group diffs: young vs old (averaging low/mod within age)
+    yng_vs_old_w3         = ((int_yng_low_w3 + int_yng_mod_w3) / 2) - ((int_old_low_w3 + int_old_mod_w3) / 2),
+    yng_vs_old_post         = ((int_yng_low_post + int_yng_mod_post) / 2) - ((int_old_low_post + int_old_mod_post) / 2),
+    yng_vs_old_w3post        = ((int_yng_low_w3post + int_yng_mod_w3post) / 2) - ((int_old_low_w3post + int_old_mod_w3post) / 2),
+    
+    # Old intervention vs control
+    old_vs_con_w3          = ((int_old_low_w3 + int_old_mod_w3) / 2) - con_old_con_w3,
+    old_vs_con_post          = ((int_old_low_post + int_old_mod_post) / 2) - con_old_con_post,
+    old_vs_con_w3post         = ((int_old_low_w3post + int_old_mod_w3post) / 2) - con_old_con_w3post,
+    
+    # Volume effect diffs between age groups
+    yng_vs_old_vol_w3      = yng_mod_vs_low_w3 - old_mod_vs_low_w3,
+    yng_vs_old_vol_post      = yng_mod_vs_low_post - old_mod_vs_low_post,
+    yng_vs_old_vol_w3post     = yng_mod_vs_low_w3post - old_mod_vs_low_w3post
+  ) |> 
+  dplyr::select(drawid, 
+                int_old_low_w3:int_old_low_w3post, int_old_mod_w3:int_old_mod_w3post,
+                int_yng_low_w3:int_yng_low_w3post, int_yng_mod_w3:int_yng_mod_w3post,
+                con_old_con_w3:con_old_con_w3post,
+                int_old_pooled_w3, int_old_pooled_post,
+                int_yng_pooled_w3, int_yng_pooled_post,
+                old_mod_vs_low_w3:old_mod_vs_low_w3post, yng_mod_vs_low_w3:yng_mod_vs_low_w3post,
+                yng_vs_old_w3:yng_vs_old_w3post, old_vs_con_w3:old_vs_con_w3post,
+                yng_vs_old_vol_w3:yng_vs_old_vol_w3post) |> 
+  pivot_longer(names_to = "contrast", values_to = "value", cols = -drawid) |> 
+  mutate(
+    delta = case_when(
+      grepl("w3post$", contrast) ~ "w3 to post",
+      grepl("w3$", contrast) ~ "pre to w3",
+      grepl("post$", contrast) ~ "pre to post"
+    ),
+    contrast_group = case_when(
+      grepl("^int_|^con_old_con", contrast) ~ "within-group",
+      grepl("_mod_vs_low", contrast) ~ "volume effect",
+      grepl("^yng_vs_old_vol", contrast) ~ "volume x age",
+      grepl("^yng_vs_old_w3|^yng_vs_old_post", contrast) ~ "age effect",
+      grepl("^old_vs_con", contrast) ~ "intervention vs control"
+    )
+  )
+
+
+# Back-transformation
+
+all_contrasts_fc_rep <- all_contrasts_rep |> 
+  mutate(fold_change = exp(value * sd_rna_rep))
+
+
+saveRDS(all_contrasts_fc_rep, "./data/data-gen/rna_mg_contrasts_fc_m4.rds")
+
+
+contrast_summary_rep <- all_contrasts_fc_rep |> 
+  group_by(contrast, contrast_group, delta) |> 
+  summarise(
+    ystd_est   = median(value),
+    ystd_lower = quantile(value, 0.025),
+    ystd_upper = quantile(value, 0.975),
+    fc_est     = median(fold_change),
+    fc_lower   = quantile(fold_change, 0.025),
+    fc_upper   = quantile(fold_change, 0.975),
+    pos        = sum(fold_change > 1) / n(),   
+    .groups = "drop"
+  ) |>
+  arrange(contrast_group, contrast, delta)
+
+
+saveRDS(contrast_summary_rep, "./data/data-gen/rna_mg_contrast_summary_m4.rds")
+
+print(contrast_summary_rep, n = 34)
+
+
+# The replicate-level random effect tightened the estimates without changing the substantive conclusions, which is what it was supposed to do. 
+
+summary(m4.post)
+
+# For plotting figures
+
+pred_rna <- get_draws(pred.post_rep) |>
+  dplyr::select(drawid, draw, tx, time) |>
+  mutate(draw_bt = exp(draw * sd_rna_rep + mean_rna_rep)) |>
+  summarise(.by = c(tx, time),
+            m     = mean(draw_bt),
+            lwr50 = quantile(draw_bt, 0.25), upr50 = quantile(draw_bt, 0.75),
+            lwr90 = quantile(draw_bt, 0.05), upr90 = quantile(draw_bt, 0.95),
+            lwr95 = quantile(draw_bt, 0.025), upr95 = quantile(draw_bt, 0.975))
+
+saveRDS(pred_rna, "data/data-gen/pred_rna.rds")
+
+contrast_rna <- contrast_summary_rep |>
+  filter(delta %in% c("pre to post", "pre to w3")) |>
+  mutate(hypothesis = case_when(
+    str_remove(contrast, "_(w3|post)$") == "yng_vs_old"       ~ "yng_vs_old_delta",
+    str_remove(contrast, "_(w3|post)$") == "old_vs_con"       ~ "old_vs_con_delta",
+    str_remove(contrast, "_(w3|post)$") == "con_old_con" ~ "con_old_con_delta",
+    str_remove(contrast, "_(w3|post)$") == "yng_mod_vs_low"   ~ "yng_mod_vs_low",
+    str_remove(contrast, "_(w3|post)$") == "old_mod_vs_low"   ~ "old_mod_vs_low",
+    str_remove(contrast, "_(w3|post)$") == "yng_vs_old_vol"   ~ "yng_vs_old_vol",
+    str_remove(contrast, "_(w3|post)$") == "int_old_pooled"   ~ "int_old_pooled_delta",
+    str_remove(contrast, "_(w3|post)$") == "int_yng_pooled"   ~ "int_yng_pooled_delta"
+  )) |>
+  filter(!is.na(hypothesis)) |>
+  transmute(hypothesis, delta, mean = fc_est, lower95 = fc_lower, upper95 = fc_upper, pos)
+
+saveRDS(contrast_rna, "data/data-gen/contrast_rna.rds")
+
+
+
+```
+
+
+#### Results
+
+Older adults in the intervention group (averaged across volume conditions) increased RNA yield by 14.1% from baseline to post (95% CI [5.3%, 23.5%], P(>0) = 99.9%). The control group tended to increase by a similar amount (13.5%, 95% CI [−4.1%, 34.2%], P(>0) = 93.2%), and there was no evidence of a difference between them (0.5%, 95% CI [−16.7%, 20.3%], P(>0) = 52.4%). The two groups differed in timing: the intervention group had already increased by week 3 (9.2%, 95% CI [1.2%, 18.2%], P(>0) = 98.6%), whereas the control group had not changed at that point (−0.9%, 95% CI [−15.1%, 15.2%], P(<0) = 55.0%). The difference between them at week 3 was still uncertain (10.6%, 95% CI [−7.0%, 30.8%], P(>0) = 87.6%). Young adults (averaged across volume conditions) increased by 11.6% by post (95% CI [2.6%, 21.4%], P(>0) = 99.6%), with no evidence of a difference from older adults (−2.4%, 95% CI [−12.6%, 9.5%], P(<0) = 65.3%). At week 3, however, young adults had increased by 17.4% (95% CI [7.8%, 28.0%], P(>0) > 99.9%), with weak evidence of a larger increase than older adults (7.4%, 95% CI [−4.5%, 20.8%], P(>0) = 88.9%). Between week 3 and post, young adults' RNA yield likely fell back relative to older adults' (−9.0%, 95% CI [−20.4%, 4.5%], P(<0) = 91.9%). Within young adults, both low-volume (15.7%, 95% CI [3.5%, 29.5%], P(>0) = 99.5%) and moderate-volume training (19.2%, 95% CI [6.4%, 33.5%], P(>0) = 99.9%) increased RNA yield by week 3. At post, the increase was 12.2% under moderate volume (95% CI [0.4%, 25.9%], P(>0) = 97.8%), while low volume tended to increase it by 10.8% (95% CI [−0.7%, 24.1%], P(>0) = 96.6%). There was no evidence of a difference between volume conditions at either time point (week 3: 2.9%, 95% CI [−10.8%, 19.9%], P(>0) = 65.7%; post: 1.1%, 95% CI [−12.6%, 17.1%], P(>0) = 56.0%). In older adults, low-volume (12.3%, 95% CI [1.0%, 24.6%], P(>0) = 98.3%) and moderate-volume training (15.8%, 95% CI [4.4%, 28.3%], P(>0) = 99.8%) both increased RNA yield by post, having tended to increase already by week 3 (low: 10.3%, 95% CI [−0.3%, 22.0%], P(>0) = 97.1%; moderate: 8.3%, 95% CI [−2.3%, 19.9%], P(>0) = 93.3%). There was no evidence of a difference between volume conditions at either time point (week 3: −1.9%, 95% CI [−14.0%, 12.3%], P(<0) = 60.4%; post: 3.1%, 95% CI [−9.9%, 17.8%], P(>0) = 67.2%). There was no evidence that the volume effect differed between age groups, either at week 3 (5.0%, 95% CI [−14.6%, 27.5%], P(>0) = 68.4%) or at post (−1.7%, 95% CI [−20.0%, 20.0%], P(<0) = 57.2%).
+
+<!--
+Consider for discussion/methods: Accounting for technical replicates. To separate genuine biological/sample-level variability from technical noise arising from repeated concentration readings of the same tissue extract, a random effect for replicate (nested within participant) was added to the model, fit on the full replicate-level dataset (1552 observations) rather than pre-averaged values. This partitioning showed that approximately 78% of the variance previously absorbed into the residual term reflected genuine sample-to-sample biological variability, with the remaining ~22% attributable to technical replicate noise. Accounting for this structure sharpened estimates throughout without altering the underlying pattern of results — several contrasts that were moderate-to-strong in the summarised-replicate model became strong once technical noise was properly partitioned out.
+-->
+
+<!--
+Summary. Once tissue mass was properly accounted for via direct modeling, and technical replicate variance was separated from genuine sample-level biological variability, RNA yield showed a robust, near-universal increase across the training period in essentially all groups. Age and intervention status did not alter the total magnitude of this increase, but did modulate its timing — younger and intervention participants tended to rise earlier, with older and control participants showing comparatively more of their increase later in the protocol. Training volume showed no credible influence at any stage.
+-->
+
+
+
+
+
+
+
+
+
+

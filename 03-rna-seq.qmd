@@ -1,0 +1,2027 @@
+---
+title: "Analysis of RNA-seq data"
+format: html
+editor_options: 
+  chunk_output_type: console
+---
+
+#### Re-cap on whats explored
+
+##### Data & pipeline
+
+192 samples, 16,878 filtered gene targets, modeled with per-gene negative-binomial mixed models (glmmTMB) via the seqwrap/empirical-Bayes-shrinkage workflow (m1 naive → m2 regularized).
+Fixed a sample-mapping error (one participant's t1 sample mislabeled as t2), which turned out to mean the study only has two real timepoints (t1 baseline, t3 follow-up) — the whole model, contrast set, and priors were rebuilt around a 3-level tx (baseline/t3low/t3mod) instead of the original assumed 5-level version.
+
+Seqwrap package update mid-analysis — this changed some internal object structure (@summaries went from a list to a single combined data frame; @errors moved to a tidy long format) but did not change the underlying statistical output, confirmed by re-running the training-effect GSEA and comparing against pre-update results (matched almost exactly, differences only at permutation-noise level).
+
+All contrasts updated to properly aggregate over sex (previously implicitly fixed at the modal sex level, since sex wasn't included in the datagrid() used for contrasts). Validated by hand-calculating two contrasts against the raw prediction grid. Empirical result: aggregating over sex made no material difference to any training-effect or volume-effect finding — gene counts, effect sizes, and GSEA top-hit tables all matched the non-aggregated version essentially exactly, suggesting sex was well-balanced across age×tx groups in this cohort. Kept as the methodologically correct approach regardless.
+
+#### Baseline age differences (Young vs. Old, at t1)
+
+- Marked transcriptional differences between age groups at baseline.
+  - Young higher: aerobic energy metabolism — oxidative phosphorylation, mitochondrial gene expression.
+  - Old higher: immune activation (humoral immune response, complement activation) and epigenetic/RNA regulation (heterochromatin formation, alternative mRNA splicing).
+- Two originally-cited categories (foam cell differentiation, DNA replication) didn't survive the corrected data — input needed on replacements.
+
+#### Training effect (baseline → t3), both age groups
+
+Large, broad response in both young (3,503 genes) and old (4,241 genes) at FDR<5% — training clearly changes gene expression substantially. Unchanged after sex-aggregation. Remarkably similar biology between age groups — 6 of top 10 GO terms shared by exact ID (RNA splicing, ribonucleoprotein complex biogenesis, integrin-mediated signaling pathway, cell adhesion mediated by integrin, collagen metabolic process, mRNA transport), same direction/magnitude — consistent with the age×time interaction being essentially null. Both groups' #1 hit is also a collagen/ECM-organization term (young: extracellular matrix organization; old: collagen fibril organization) — closely related, functionally overlapping, though not an exact ID match.
+
+Pattern:
+- Training up-regulates ECM/connective tissue remodeling (collagen metabolic process, integrin signaling/adhesion, ECM/collagen fibril organization)
+- Training down-regulates RNA-processing/ribosome-biogenesis machinery (RNA splicing, ribonucleoprotein complex biogenesis, mRNA transport)
+
+Non-shared categories: 
+- Young-only: cytoplasmic translation, mesenchymal cell migration, angiogenesis; 
+- Old-only: regulation of coagulation, cellular extravasation, regulation of blood coagulation. 
+Young leans collagen/migration/angiogenesis, old leans coagulation/vascular — secondary difference, not contradictory to the main story.
+
+#### Volume effect (Mod vs. Low), old adults only
+
+- Young: essentially null (young_volume_t3, 1 gene) — no comparable volume effect.
+- Old: weak but real signal (1,216 genes at FDR<5%) — moderate vs. low volume produces a detectable transcriptional difference.  
+- Together, an age-dependent volume effect. Unchanged after sex-aggregation.
+
+Higher volume in old yielded more mitochondrial/oxidative signal (inner mitochondrial membrane organization, respiratory electron transport chain, purine-containing compound biosynthesis) but less muscle-contractile/translational signal (skeletal muscle contraction, cytoplasmic translation, muscle organ development, striated muscle cell differentiation, ribosomal small subunit biogenesis).
+old_volume_t3's p.adjust values markedly weaker than the training-effect contrasts — real but modest signal (1,216 genes vs. 3,500–4,200 for the main training effects).
+
+### TODO
+
+- Gene-sets to non-annotated genes that were different between young and old at baseline - Are these also related to inflammation and oxidative phosphorylation?
+
+- Cell type contributions - Is the large differences between young and old at baseline related to differences in cell type proportions? [SCDC](https://meichendong.github.io/SCDC/) could be used for deconvloution. 
+
+- Splicing factors and pathways to bridge to intron retention
+
+- No figures/write-up for the training or volume-effect results yet (only the baseline age comparison has a finished figure).
+
+- Final clustering/correlation section (non-annotated gene GO annotation) completed but not yet interpreted or written up.
+
+
+
+```{r}
+#| code-fold: true
+
+
+# Packages
+library(reliefdata)
+library(seqwrap)
+library(tidyverse)
+library(edgeR)
+library(marginaleffects)
+library(gt)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(AnnotationDbi)
+library(english)
+
+```
+
+
+```{r}
+#| code-fold: true
+# Participants / samples -- Metadata
+metadata <- reliefdata::relief_seqsamples |> 
+  mutate(participant = as.character(participant)) |> 
+  dplyr::rename(sample_weight = weight) |> 
+  inner_join(relief_participants ) |> 
+  inner_join(relief_volume |> 
+               dplyr::select(-arm) |> 
+              mutate(participant = as.character(participant)) ) |> 
+  dplyr::select(participant, time, age, leg,sex, condition, allocation, sample_weight, seq_sample_id) |> 
+  mutate(age = if_else(age < 40, "young", "old")) |> 
+  arrange(seq_sample_id)
+
+metadata <- metadata |>
+  mutate(time = if_else(
+    participant == "3003" & time == "t2" & leg == "L" & condition == "mod",
+    "t1",
+    time
+  )) # t1 L sample wrongfully labelled as t2 for this participant, this fixes it short-term, but it should be looked into closer. 
+
+
+
+# Read gene-level data 
+dat <- readRDS("data-raw-rnaseq/relief_gene.RDS"); dat <- dat$expected_count
+
+
+# Number of samples to RNA-seq
+nsamp <- stringr::str_to_sentence(as.english(nrow(metadata)))
+nsamp_included <- (ncol(dat) - 1)
+
+
+
+```
+
+
+`r nsamp` total RNA samples were selected for RNA-sequencing analysis of which `r nsamp_included` samples passed initial quality assessment (RIN > 8) and were used in downstream analyses. Purified mRNA (poly-T oligo-attached magnetic beads) was used for library preparation and subsequent 150-bp paired-end sequencing (Illumina NovaSeq, Novogene Europe, Cambridge, United Kingdom). Raw reads were filtered (SOFTWARE, settings) and aligned to the Human genome (Release) followed by gene and transcript level quantification using RSEM (version).
+
+Gene counts (filtered for low-abundance targets) were modeled using a regularized negative binomial generalized linear mixed model [@glmmmtb] including model parameters for sex, time (baseline, week 3 and week 12), age-group (young and old) and condition (low- and moderate-volume) and the interaction between time age and condition. A varying intercept (random effect) was used for participant, and the dispersion parameter was estimated using the `nbinom2` parameterization available in `glmmTMB`[@glmmmtb]. The effective library size [@robinson2010;@edger] was included as an offset to account for sequencing depth. Regularization through an empirical Bayes shrinkage approach[@efron2010] was achieved using a two-step approach. First, naive models were fitted for all target counts (gene/transcript) using our in-house pipeline [@seqwrap] and estimates for all model parameters (except the intercept) were used to create priors for subsequent informed models. Fixed effect priors were constructed using a normal distribution with mean and standard deviations from each parameter value from the first model pass, the prior for the varying intercepts were constructed using a gamma distribution with the shape parameter informed by the mean from the naive model estimates and the  scale parameter fixed to 2. Finally, the dispersion parameter priors were constructed by fitting a trend model (Local Polynomial Regression Fit) to the association between raw mean log counts and log dispersion across all targets. The predicted dispersion at target-specific raw mean log count was used as the mean and the model residual standard error was used as the standard deviation to define a normally distributed target-specific prior.
+
+
+## RNA-seq analyses - Supplementary information
+
+
+
+```{r}
+#| include: false
+#| echo: false
+
+# Plot samples
+
+metadata |> 
+  dplyr::select(participant, time, age, allocation, condition) |> 
+  mutate(obs = "obs") |> 
+  pivot_wider(names_from = time, 
+              values_from = obs) |> 
+  arrange(participant) |> 
+  pivot_longer(names_to = "time",
+               values_to = "obs", 
+               cols = t3:t1 ) |> 
+  ggplot(aes(time, participant, 
+             fill = obs)) + geom_point(shape = 21) +
+  facet_wrap(age ~ condition, scales = "free_y")
+
+
+
+metadata |> 
+  summarise(.by = c(time, age, condition), 
+            n = n()) |> 
+  arrange(time)
+
+
+
+
+
+```
+
+
+Before fitting preliminary models to gene count data, the count matrix is filtered for low-abundance genes using `edgeR::filterByExpr` using sex and age as the grouping variable. The count matrix is used to calculate the trimmed mean of M values approach (TMM) [@robinson2010;@edger]. 
+
+
+```{r}
+#| code-fold: true
+
+# Confirm sample names in seq_sample_id,
+# all(colnames(dat[,-1]) %in% metadata$seq_sample_id)
+
+# All samples in the data exists in the meta data
+# all(metadata$seq_sample_id %in% colnames(dat[,-1]))
+# Not all sample id's are in the data
+
+# Subset the metadata to match the data
+metadata <- metadata |> 
+  filter(seq_sample_id %in% colnames(dat[,-1]))
+
+
+# Sort the data 
+# all_of provides a fail safe as it checks that all samples are 
+# in the data
+dat <- dat |> 
+  dplyr::select(gene_id, all_of(metadata$seq_sample_id)) 
+
+
+# Filter by expression
+keep <- filterByExpr(
+    dat[,-1],
+    min.count = 10,
+    min.total.count = 15,
+    large.n = 10,
+    min.prop = 0.7,
+    group = paste(metadata$sex, metadata$age))
+
+# Convert to DGE list for library size normalization
+dat_filtered <- dat[keep,] |> 
+  mutate(across(starts_with("R"), as.integer)) |> 
+  data.frame()
+
+y <- DGEList(dat_filtered[,-1])
+y <- normLibSizes(y, method = "TMM")
+
+# Get CPM-values for downstream analyses
+logcpm_y <- cpm(y, log = TRUE, prior.count = 2)
+
+
+
+libSize <- y$samples |> 
+  rownames_to_column(var = "seq_sample_id") |>
+    dplyr::select(-group)
+
+
+metadata2 <- metadata |> 
+  inner_join(libSize) |> 
+  mutate(efflibsize = (lib.size * norm.factors) / median(lib.size * norm.factors), 
+         ln_efflibsize = log(efflibsize), 
+         tx = if_else(time == "t1", "baseline", paste0(time, condition)), 
+         tx = factor(tx, levels = c("baseline", "t3low", "t3mod")), 
+         age = factor(age, levels = c("old", "young")), 
+         sex = factor(sex, levels = c("male", "female"))) |> 
+  dplyr::select(-lib.size, -norm.factors) 
+
+
+```
+
+
+## Model prototyping
+
+We are constructing a model that will capture:
+
+- Effects of the training intervention averaged over age and volume conditions (descriptive)
+- Average effects of the training intervention within age groups, averaged over volume conditions (descriptive)
+- Differences between age group in change from baseline to time 2 and 3, averaged over volume conditions (inferential)
+- Differences between volume conditions at times 2 and 3, averaged over age groups (inferential) 
+- Differences between volume conditions at times 2 and 3 within age groups (descriptive)
+- Differences between volume conditions between age groups at times 2 and 3 (inferential)
+
+We separate descriptive from inferential contrasts here to avoid making claims about, e.g., age-group differences based on informal comparisons of within-group effects without a formal contrast. The within-group contrasts can still be used for description. Sex is added as a control variable to balance any sex differences between groups and time points.
+
+The model can be described as 
+
+$$
+\begin{align}
+y_{i[g]} &\sim \operatorname{NB2}(\mu_{i[g]}, \phi_{[g]}) \\
+\log(\mu_{i[g]} ) &= \beta_{k[g]}X_i  + \log(S_i) + b_{0i[g]} \\
+\beta_{k[g]}X_i &= \beta_{0[g]} + \beta_{1[g]}\text{Sex}_i + \beta_{2[g]}\text{A}_i + \beta_{3[g]}\text{TX1}_i + \beta_{4[g]}\text{TX2}_i + \beta_{5[g]}\text{TX3}_i + \beta_{6[g]}\text{TX4}_i + \beta_{7[g]}(\text{A}_i \times \text{TX1}_i) + \beta_{8[g]}(\text{A}_i \times \text{TX2}_i) + \beta_{9[g]}(\text{A}_i \times \text{TX3}_i)+ \beta_{10[g]}(\text{A}_i \times \text{TX4}_i)\\ 
+b_{0i[g]} &\sim \operatorname{Normal}(0, \sigma_{b[g]}) \\
+\end{align}
+$$
+where the gene expression levels for gene *g*, and row *i* in the meta data ($y_{i[g]}$), is distributed according to a negative binomial distribution with mean $\mu_{i[g]}$ and dispersion $\phi_{[g]}$. The linear predictor for $\mu_{i[g]}$ has a set of fixed effects $\beta_{k[g]}X_i$, an offset term $\log(S_i)$ describing the TMM normalized library size as a fraction of the median library size, and a participant-level varying intercept ($b_{0i[g]}$). The fixed effects contain parameters describing the intercept ($\beta_{0[g]}$) representing the expression level in the old age-group at baseline (`time == "t1"`), the differences between age groups (*A*) at baseline ($\beta_{1[g]}\text{A}_i$), time-condition-effects in the reference level age group (e.g., $\beta_{3[g]}\text{TX1}_i$) and the interaction between age and time-condition-effects (e.g., $\beta_{6[g]}(\text{A}_i \times \text{TX1}_i)$). The time-condition effect captures combination of time-points and volume (Low vs. Moderate volume). $\beta_{1[g]}\text{Sex}_i$ represent the sex variable with corresponding its parameter.
+
+We will use `glmmTMB` to fit the model using the `nbinom2` family function. The dispersion ($\phi$) parameter will be part of describing the variance in the model as $\operatorname{Var}(y_i) = \mu_i + \frac{\mu^2_i}{\phi}$. A large $\phi$ indicate that overdispersion in relation to a Poisson dispersion is small, as $\phi$ decrease, over-dispersion increase[^notes-on-parameterization]. 
+
+[^notes-on-parameterization]: See `?glmmTMB::nbinom2` for a description of the dispersion parameterization. We have previously used the same parameterization in describing the seqwrap[@seqwrap]. 
+
+Using this model we can construct the custom contrasts needed to get estimates of the comparisons listed above. Contrasts are created using the `marginaleffects` package[@marginaleffects] and incorporated in the in the seqwrap workflow as outlined below.
+
+First we fit prototype model to a subset of the data set (a subset of gene targets). 
+
+```{r}
+# Set up the model prototype in seqwrap_compose
+m0 <- seqwrap_compose(
+  modelfun = glmmTMB::glmmTMB, 
+  # Using alist to avoid evaluation of list components
+  arguments = alist(
+    # The model formula and family function needs to be explicitly
+    # referenced here. 
+    formula = y ~ sex + age * tx + offset(ln_efflibsize) + (1|participant), 
+    family = glmmTMB::nbinom2()
+    ),
+  # Data, metadata and sample id
+  data = dat_filtered, 
+  metadata = metadata2, 
+  samplename = "seq_sample_id")
+
+m0r <- seqwrap(m0, 
+        cores = 12,
+        # Using a subset will give us 12 models to experiment on
+        subset = 1:12, 
+        # return_models will save models in the result object 
+        return_models = TRUE)
+```
+
+The prototyping worked without any error or warning messages. Next we extract one model to build the contrast around. @tbl-model-prototype-tidy shows estimates from the initial model. 
+
+```{r}
+#| label: tbl-model-prototype-tidy
+# Extract a model object
+m <- m0r@models[[1]]
+
+
+broom.mixed::tidy(m) |> 
+  gt() |> 
+  fmt_auto()
+```
+
+Using `predictions` from the `marginaleffects` package we can extract predictions at a specified data grid. The data grid specified in the code below will give us predictions at combinations of age and `tx` (the combination of volume condition and time) at an offset of 0 (the median library size). The resulting predictions are shown in @tbl-model-prototype-predictions
+
+```{r}
+#| label: tbl-model-prototype-predictions
+
+marginaleffects::predictions(m, 
+                                   re.form = NA,
+                                   type = "link",
+                                   newdata = datagrid(tx = unique, 
+                                                      age = unique, 
+                                                      ln_efflibsize = 0)) |> 
+  data.frame() |> 
+  dplyr::select(rowid, age, tx, ln_efflibsize, estimate) |> 
+  gt() |> 
+  fmt_auto()
+
+
+```
+
+The next step is to set up contrasts. This can be done using the hypothesis argument in `marginaleffects::predictions`. As a sanity check we add a single contrast, with a corresponding single parameter value in the model output (@tbl-model-prototype-prediction-contrast). This contrast corresponds to the parameter `ageyoung` in the model summary (@tbl-model-prototype-prediction-modelsummary).
+
+```{r}
+#| label: tbl-model-prototype-prediction-contrast
+
+marginaleffects::predictions(m, 
+                                   re.form = NA,
+                                   type = "link",
+                                   newdata = datagrid(tx = unique, 
+                                                      age = unique, 
+                                                      ln_efflibsize = 0),
+                                   hypothesis = c(
+                                     # This contrast is the same as ageyoung in the model summary
+                                     "young_old_baseline" = "b2 - b1 = 0")) |> 
+   data.frame() |> 
+  gt() |> 
+  fmt_auto()
+
+
+```
+
+
+```{r}
+#| label: tbl-model-prototype-prediction-modelsummary
+
+broom.mixed::tidy(m) |> 
+  filter(term == "ageyoung") |> 
+  gt() |> 
+  fmt_auto()
+
+
+```
+
+We are now building a full function that takes a model object as its input and returns a data frame with contrast estimates. We also include the parameter estimates for downstream analyses. Note that the marginaleffects package will return a warning when specifying custom contrasts for the first time in a sessions. Since seqwrap will initialize a new session for each target we need to disable this warning (`options(marginaleffects_safe = FALSE)`) to avoid polluting our summary slot. The function `sum_fun_contr` can be tested on a single model object before being included as part of a seqwrap model object. @tbl-model-testsumfun shows the output from the custom summary function.  
+
+```{r}
+#| label: tbl-model-testsumfun
+
+## Attempting to include sex in the contrasts
+
+sum_fun_contr <- function(m) {
+  
+  options(marginaleffects_safe = FALSE)
+  
+  est <- broom.mixed::tidy(m)
+  
+  terms <- est |> 
+    dplyr::pull(term)
+  
+  checkterms <- c("(Intercept)", 
+                  "sexfemale", 
+                  "ageyoung", 
+                  "txt3low", 
+                  "txt3mod",
+                  "ageyoung:txt3low", 
+                  "ageyoung:txt3mod",
+                  "sd__(Intercept)")
+  
+  if(!all(terms == checkterms)) stop("The terms are different from expected, contrasts may not be correct. Check the contrasts and model formulation.")
+
+  contrasts <- marginaleffects::predictions(m, 
+                                   re.form = NA,
+                                   type = "link",
+                                   newdata = marginaleffects::datagrid(
+                                     tx = unique, 
+                                     age = unique, 
+                                     sex = unique,          # <-- ADDED
+                                     ln_efflibsize = 0),
+                                   hypothesis = c(
+                                     "young_old_baseline" = "((b3+b4)/2) - ((b1+b2)/2) = 0",
+                                     "young_t3" = "(((b7+b8)/2) + ((b11+b12)/2))/2 - ((b3+b4)/2) = 0",
+                                     "old_t3"   = "(((b5+b6)/2) + ((b9+b10)/2))/2 - ((b1+b2)/2) = 0",
+                                     "young_old_t3" = "((((b7+b8)/2) + ((b11+b12)/2))/2 - ((b3+b4)/2)) - ((((b5+b6)/2) + ((b9+b10)/2))/2 - ((b1+b2)/2)) = 0",
+                                     "mod_low_t3" = "((((b9+b10)/2) + ((b11+b12)/2))/2) - ((((b5+b6)/2) + ((b7+b8)/2))/2) = 0",
+                                     "young_volume_t3" = "((b11+b12)/2) - ((b7+b8)/2) = 0",
+                                     "old_volume_t3"   = "((b9+b10)/2) - ((b5+b6)/2) = 0",
+                                     "young_old_volume_t3" = "(((b11+b12)/2) - ((b7+b8)/2)) - (((b9+b10)/2) - ((b5+b6)/2)) = 0"
+                                     ))
+  
+  out <- contrasts |> 
+    data.frame() |> 
+    dplyr::mutate(effect = "contrast", 
+           component = "contrast", 
+           group = NA) |> 
+    dplyr::select(term = hypothesis, effect, component, group, estimate:p.value, conf.low, conf.high ) |> 
+    dplyr::bind_rows(
+      est |> 
+    dplyr::mutate(conf.low = NA, 
+           conf.high = NA) |> 
+    dplyr::select(term, effect, component, group, estimate:p.value, conf.low, conf.high)
+    )
+  
+  return(out)
+}
+
+## OLD sum_fun
+#sum_fun_contr <- function(m) {
+#  
+#  # Disable the warning message
+#  options(marginaleffects_safe = FALSE)
+#  
+#  # Model estimates
+#  est <- broom.mixed::tidy(m)
+#  
+#  # A check of parameter names 
+#  terms <- est |> 
+#    dplyr::pull(term)
+#  # The terms should match this order/names
+#    checkterms <- c("(Intercept)", 
+#                    "sexfemale", 
+#                    "ageyoung", 
+#                    "txt3low", 
+#                    "txt3mod",
+#                    "ageyoung:txt3low", 
+#                    "ageyoung:txt3mod",
+#                    "sd__(Intercept)")
+#  
+#  # Throw an error if not match
+#  if(!all(terms == checkterms)) stop("The terms are different from expected, contrasts may not #be correct. Check the contrasts and model formulation.")
+#
+#
+#  # Compute contrasts using predictions 
+# 
+#  contrasts <- marginaleffects::predictions(m, 
+#                                   re.form = NA,
+#                                   type = "link",
+#                                   newdata = marginaleffects::datagrid(
+#                                     tx = unique, 
+#                                     age = unique, 
+#                                     ln_efflibsize = 0),
+#                                   hypothesis = c(
+#                                     # Age difference at baseline
+#                                     "young_old_baseline" = "b2 - b1 = 0",
+#                                     
+#                                     # Time contrast (baseline -> t3), averaged over volume, #within age
+#                                     "young_t3" = "(b4 + b6)/2 - b2 = 0",
+#                                     "old_t3"   = "(b3 + b5)/2 - b1 = 0",
+#
+#                                     # Age difference in change over time, averaged over volume
+#                                     "young_old_t3" = "((b4 + b6)/2 - b2) - ((b3 + b5)/2 - b1) #= 0",
+#                                     
+#                                     # Mod vs. Low at t3, averaged over age
+#                                     "mod_low_t3" = "((b5 + b6)/2) - ((b3 + b4)/2) = 0",
+#
+#                                     # Volume effect (Mod - Low) within age, at t3
+#                                     "young_volume_t3" = "b6 - b4 = 0",
+#                                     "old_volume_t3"   = "b5 - b3 = 0",
+#
+#                                     # Age difference in volume effect, at t3
+#                                     "young_old_volume_t3" = "(b6 - b4) - (b5 - b3) = 0"
+#))
+#  # To avoid issues downstream, convert explicitly to data frame
+#  out <- contrasts |> 
+#    data.frame() |> 
+#    dplyr::mutate(effect = "contrast", 
+#           component = "contrast", 
+#           group = NA) |> 
+#    dplyr::select(term = hypothesis, effect, component, group, estimate:p.value, conf.low, #conf.high ) |> 
+#    dplyr::bind_rows(
+#      est |> 
+#    dplyr::mutate(conf.low = NA, 
+#           conf.high = NA) |> 
+#    dplyr::select(term, effect, component, group, estimate:p.value, conf.low, conf.high)
+#    )
+#  
+#  # Bind with model estimates
+#  
+#  return(out)
+#}
+
+
+sum_fun_contr(m) |> 
+  gt() |> 
+  fmt_auto()
+
+```
+
+For the next step in the workflow we will need to extract estimates of the dispersion parameter. We will use the evaluation slot in `seqwrap` to do this. We will borrow code from the [`seqwrappaper`](https://github.com/trainome/seqwrappaper) allowing us to expand the model later to a Poisson observation-level random effect model. The custom evaluation function will give us an estimate of $\phi$ (dispersion) and convergence statistics. The evaluation function is built below and tested on a model object. 
+
+
+```{r}
+#| label: tbl-model-testevalfun
+
+# Summary function for seqwrap
+sigma_summary2 <- function(x) {
+  if (is.null(x$fit$convergence)) {
+    conv <- 1
+  } else {
+    conv <- x$fit$convergence[[1]]
+  }
+  ### Simulating scaled resid ###
+  # This creates simulated residuals for test of uniformity and dispersion.
+  # See
+  # https://cran.r-project.org/web/packages/DHARMa/vignettes/DHARMa.html
+  # for details.
+  residObj <- DHARMa::simulateResiduals(x, plot = FALSE)
+
+  # Saving tests from DHARMa
+  unif <- DHARMa::testUniformity(residObj, plot = FALSE)
+  disp <- DHARMa::testDispersion(residObj, plot = FALSE)
+
+  # Saving SD of Obs Level Rand Eff in the Poisson model
+
+  tidy_coef <- broom.mixed::tidy(x)
+
+  if (any(tidy_coef$group %in% "seq_sample_id")) {
+    olre.sd <- tidy_coef |>
+      dplyr::filter(group == "seq_sample_id") |>
+      dplyr::pull(estimate)
+  } else {
+    olre.sd <- NA
+  }
+
+  # Combine all in a data frame
+  out <- data.frame(
+    dispersion = data.frame(summary(x$sdr))["betadisp", 1],
+    dispersion.se = data.frame(summary(x$sdr))["betadisp", 2],
+    olre.sd = olre.sd,
+    log_mu = mean(stats::predict(x, type = "link")),
+    convergence = conv,
+    pdHess = x$sdr$pdHess,
+    aic = stats::AIC(x),
+    unif.p = unif$p.value,
+    unif.stat = unif$statistic,
+    disp.p = disp$p.value,
+    disp.stat = disp$statistic
+  )
+  return(out)
+}
+
+
+sigma_summary2(m)
+
+```
+
+We are ready to build the full model with custom summary functions.  
+
+```{r}
+
+# Set up the model prototype in seqwrap_compose
+m1 <- seqwrap_compose(
+  modelfun = glmmTMB::glmmTMB, 
+  # Using alist to avoid evaluation of list components
+  arguments = alist(
+    # The model formula and family function needs to be explicitly
+    # referenced here. 
+    formula = y ~ sex + age * tx + offset(ln_efflibsize) + (1|participant), 
+    family = glmmTMB::nbinom2()
+    ),
+  # Data, metadata and sample id
+  eval_fun = sigma_summary2, 
+  summary_fun = sum_fun_contr,
+  data = dat_filtered, 
+  metadata = metadata2, 
+  samplename = "seq_sample_id")
+
+m1r <- seqwrap(m1, 
+        cores = 12,
+        # Using a subset will give us 12 models to experiment on
+        subset = 1:12, 
+        # return_models will save models in the result object 
+        return_models = TRUE)
+
+
+```
+
+The subset models turns out to give us both summaries and evaluations. We can proceed to model the full data set. 
+
+```{r}
+
+m1s <- seqwrap_summarise(m1r)
+
+head(m1s$summaries)
+
+head(m1s$evaluations)
+
+```
+
+
+### Running the model on the full data set.
+
+The difference from the previous run will be that we disable the subset argument and tell `seqwrap` not to return models (returning the model object will be too memory demanding). We are setting up the script so that we can re-use previous fit unless `refit == TRUE`.
+
+```{r}
+
+refit <- FALSE
+
+# Only refit model if it does not exists or the refit flag is 
+# set to TRUE.
+if(refit | !file.exists("data-out/m1-rnaseq.RDS") ) {
+ 
+  m1r <- seqwrap(m1, 
+        cores = 12,
+        # return_models will save models in the result object 
+        return_models = FALSE)
+
+ saveRDS(m1r, "data-out/m1-rnaseq.RDS", compress = "xz")
+  
+  
+}
+
+# Error check after including "sex" in the contrasts/hypotheses
+#m1r@errors |> 
+#  dplyr::glimpse()
+
+#m1r@errors |> 
+#  dplyr::filter(target == "ENSG00000286235.1_ENSG00000286235") |> 
+#  dplyr::pull(message)
+
+# one gene (ENSG00000286235.1) has sparse/structurally deficient data that the native m1 model can't fully resolve - expected to be stabilized by m2's informative priors
+
+
+m1r <- readRDS("data-out/m1-rnaseq.RDS")
+
+# "Some targets had associated errors or warnings"
+# - one summery function warning indicated
+
+#m1s <- seqwrap_summarise(m1r)
+# check seqwrap's warning log — the exact accessor may vary, 
+# but typically something like:
+#m1r@warnings  
+# or check the seqwrap object structure directly:
+#str(m1r, max.level = 1)
+
+#m1r@errors |> 
+#  dplyr::glimpse()
+
+#m1r@errors |> 
+#  dplyr::filter(!purrr::map_lgl(warn_sum, is.null))
+
+#w <- m1r@errors |> 
+#  dplyr::filter(!purrr::map_lgl(warn_sum, is.null)) |> 
+#  dplyr::pull(warn_sum) |> 
+#  purrr::pluck(1)
+
+#conditionMessage(w)
+# "Model matrix is rank deficient. Some variance-covariance parameters are\n  missing."
+
+```
+
+## Updating the model with empirical Bayes shrinkage
+
+The preliminary estimates from the first pass of the data will serve as basis for shrinkage in a second pass. This procedure is a pragmatic empirical Bayes procedure that we apply to relevant parameters of the model to achieve regularization on more stable estimates [@seqwrap;@efron2010, pp 4-]. Using the raw mean counts as a predictor we fit a local polynomial regression to capture the trend of the dispersion estimates (@fig-dispersion-trend). The trend serves as the basis of a normal prior with the trend as the mean and the standard error as the standard deviation. 
+
+```{r}
+#| code-fold: true
+#| label: fig-dispersion-trend
+#| fig-cap: "A loess trend for the relationship between raw log-counts means and dispersion. Shaded regions represent 50, 95 and 99% quantile prediction intervals."
+
+
+# Summarise estimates from the preliminary model
+m1s <- seqwrap_summarise(m1r, verbose = FALSE)
+
+# Collect all model parameter estimates  
+eb_estimates <- m1s$summaries |> 
+  filter(term %in% c("sexfemale", 
+                     "ageyoung", 
+                     "txt3low", 
+                     "txt3mod", 
+                     "ageyoung:txt3low", 
+                     "ageyoung:txt3mod", 
+                     "sd__(Intercept)")) |> 
+  summarise(.by = term, 
+             m = mean(estimate), 
+             s = sd(estimate)) 
+  
+
+
+# Extract phi vs. raw counts
+raw_mu <- data.frame(
+  target = dat_filtered[,1],
+  log_mu_raw = log(rowMeans(dat_filtered[,-1]))) 
+
+# The dispersion data is combined here with raw counts means
+dispersion_data <- m1s$evaluations |> 
+  dplyr::select(target, dispersion, dispersion.se, log_mu) |> 
+  inner_join(raw_mu) 
+
+
+# Fit a loess model 
+trend_model <- loess(dispersion ~ log_mu_raw, 
+      data = dispersion_data, 
+      span = 0.7)
+
+
+# Predictions from the trend model. Here we use simulations to approximate 
+# 50, 95 and 99% quantile intervals around the predicted mean to visualize the 
+# implied shrinkage prior.
+
+#pred <- data.frame(
+#  log_mu_raw = seq(from = 1.5, to = 13.5, by = 0.1), 
+#  disp_pred = predict(trend_model, newdata = data.frame(log_mu_raw = seq(from = 1.5, to = 13.5, by = 0.1)))
+#) |>
+
+# Change after including sex contrasts
+mu_range <- range(dispersion_data$log_mu_raw, na.rm = TRUE)
+
+pred <- data.frame(
+  log_mu_raw = seq(from = mu_range[1], to = mu_range[2], by = 0.1), 
+  disp_pred = predict(trend_model, 
+                       newdata = data.frame(log_mu_raw = seq(from = mu_range[1], to = mu_range[2], by = 0.1)))
+) |> 
+  expand_grid(draw = 1:2000) |> 
+  rowwise() |> 
+  mutate(pred_int = rnorm(1, mean = disp_pred, sd = trend_model$s)) |> 
+  ungroup() |> 
+  summarise(.by = c(log_mu_raw, disp_pred), 
+            lwr50 = quantile(pred_int, 0.25), 
+            upr50 = quantile(pred_int, 0.75),
+            lwr95 = quantile(pred_int, 0.025), 
+            upr95 = quantile(pred_int, 0.975), 
+            lwr99 = quantile(pred_int, 0.015), 
+            upr99 = quantile(pred_int, 0.995)) 
+
+
+dispersion_data |> 
+  dplyr::select(target, dispersion, dispersion.se, log_mu) |> 
+  inner_join(raw_mu) |> 
+  ggplot(aes(log_mu_raw, dispersion)) + 
+  geom_point(alpha = 0.2) +
+  geom_line(data = pred, 
+            aes(log_mu_raw, 
+                disp_pred), 
+            color = "blue", 
+            linewidth = 1.5) + 
+  geom_ribbon(data = pred, 
+              aes(log_mu_raw, 
+                disp_pred, 
+                ymin = lwr50, 
+                ymax =upr50), 
+              alpha = 0.2) + 
+  geom_ribbon(data = pred, 
+              aes(log_mu_raw, 
+                disp_pred, 
+                ymin = lwr95 , 
+                ymax = upr95), 
+              alpha = 0.2) + 
+  geom_ribbon(data = pred, 
+              aes(log_mu_raw, 
+                disp_pred, 
+                ymin = lwr99, 
+                ymax =upr99), 
+              alpha = 0.2) +
+  labs(x = "Mean raw counts (log)", 
+       y = "Dispersion (log &phi;)") + 
+  theme(axis.title.y = ggtext::element_markdown())
+
+
+```
+
+
+Similarly, for all fixed effects parameters, except the intercept, we use the mean and standard deviation of the preliminary estimates to create priors. For the varying intercepts (`sd__(Intercept)`) we will use a gamma distribution to weekly regularize this parameter. The intercept parameter will be left without a prior as it is on different scales depending on the gene target. 
+
+The code below first extracts the trend model predictions for the dispersion estimate then combine these on a target-by-target basis with a overall fixed-effect estimates.
+
+
+```{r}
+#| code-fold: true
+
+
+dispersion_prior <- data.frame(
+  target = dat_filtered[,1], 
+  pred = round(
+    predict(
+      trend_model,
+      newdata = data.frame(log_mu_raw = log(rowMeans(dat_filtered[,-1])))),
+    3),
+  s = round(trend_model$s, 3)) |>
+ mutate(prior = paste0("normal(", pred, ",", s, ")")) 
+  
+
+
+
+fixef_priors <- eb_estimates |> 
+  mutate(prior = if_else(term == "sd__(Intercept)", 
+                         paste0("gamma(", 
+                                round(m, 3), 
+                                ",", 2, ")"), 
+                         paste0("normal(", 
+                        round(m, 3), 
+                        ",", 
+                        round(s, 3), ")")), 
+         class = c(rep("fixef", 6), "ranef"), 
+         coef = if_else(term == "sd__(Intercept)", "participant", term))   |> 
+  dplyr::select(prior, class, coef)
+  
+
+Priors_list <- list() 
+for(j in 1:nrow(dat_filtered)) {
+  
+  df <- bind_rows(
+    fixef_priors, 
+    data.frame(
+      prior = dispersion_prior[dispersion_prior$target == dat_filtered[j,1],4], 
+      class = "fixef_disp", 
+      coef = "1") )
+  
+  Priors_list[[j]] <- df
+  
+}
+
+
+
+
+```
+
+We will now build the model with regularizing (empirical Bayes) priors. The test run (@tbl-regprior-example) confirms that the prior is part of the model.
+
+```{r}
+#| code-fold: true
+#| label: tbl-regprior-example
+
+m2 <-  seqwrap_compose(
+  modelfun = glmmTMB::glmmTMB, 
+  # Using alist to avoid evaluation of list components
+  arguments = alist(
+    # The model formula and family function needs to be explicitly
+    # referenced here. 
+    formula = y ~ sex + age * tx + offset(ln_efflibsize) + (1|participant), 
+    family = glmmTMB::nbinom2(), 
+    priors = data.frame(
+      prior = prior, 
+      class = class, 
+      coef = coef)),
+  # Data, metadata and sample id
+  eval_fun = sigma_summary2, 
+  summary_fun = sum_fun_contr,
+  targetdata = Priors_list,
+  data = dat_filtered, 
+  metadata = metadata2, 
+  samplename = "seq_sample_id")
+
+
+m2r <- seqwrap(
+  m2, 
+  cores = 12, 
+  subset = 1:12, 
+  return_models = TRUE
+)
+
+
+m2r@models[[1]]$modelInfo$priors |> 
+  gt()
+
+
+
+```
+
+
+We are now running the full data set using the regularized (informed) model.
+
+```{r}
+#| code-fold: true
+
+refit <- FALSE
+
+# Only refit model if it does not exists or the refit flag is 
+# set to TRUE.
+if(refit | !file.exists("data-out/m2-rnaseq.RDS") ) {
+ 
+  m2r <- seqwrap(
+   m2, 
+   cores = 12, 
+   return_models = FALSE
+  )
+
+ saveRDS(m2r, "data-out/m2-rnaseq.RDS")
+  
+  
+}
+
+m2r <- readRDS("data-out/m2-rnaseq.RDS")
+
+
+#m2s <- seqwrap_summarise(m2r, verbose = FALSE)
+#length(unique(m2s$summaries$target))  # expect 16878
+# No errors/warnings found
+
+
+```
+
+
+
+
+
+### Shrinkage of model parameters
+
+Comparing the regularized model to the non-informed model confirms that regularization induce shrinkage of model estimates (@fig-effect-of-shrinkage). 
+
+```{r}
+#| code-fold: true
+
+
+# Get model estimates from storage...
+m1r <- readRDS("data-out/m1-rnaseq.RDS")
+m2r <- readRDS("data-out/m2-rnaseq.RDS")
+
+m1s <- seqwrap_summarise(m1r, verbose = FALSE)
+m2s <- seqwrap_summarise(m2r, verbose = FALSE)
+
+
+saveRDS(m2s$summaries, "data-out/m2-summaries.RDS")
+
+
+```
+
+
+```{r}
+#| code-fold: true
+#| label: fig-effect-of-shrinkage
+#| fig-cap: "Effects of shrinkage on model estimates and p-values for the age effect at basline. Diagonal lines indicate the identity line." 
+
+
+
+p1 <- bind_rows(
+  
+  m1s$summaries |> 
+  filter(term %in% c("ageyoung")) |> 
+  dplyr::select(target, estimate, p.value, statistic) |> 
+  mutate(model = "m1"), 
+  
+  m2s$summaries |> 
+  filter(term %in% c("ageyoung")) |> 
+  dplyr::select(target, estimate, p.value, statistic)|> 
+  mutate(model = "m2")) |> 
+  pivot_wider(names_from = model, 
+              values_from = c(estimate, p.value, statistic)) |> 
+  ggplot(aes(estimate_m1, estimate_m2)) + 
+  geom_point(alpha = 0.4, color = "steelblue") + 
+  geom_hline(yintercept = 0) +
+  geom_vline(xintercept = 0) + 
+  geom_abline(intercept = 0, slope = 1) + 
+  labs(x = "Estimate non-informed models (log)", 
+       y = "Estimate regularized models (log)")
+   
+
+p2 <- bind_rows(
+  
+  m1s$summaries |> 
+  filter(term %in% c("ageyoung")) |> 
+  dplyr::select(target, estimate, p.value, statistic) |> 
+  mutate(model = "m1"), 
+  
+  m2s$summaries |> 
+  filter(term %in% c("ageyoung")) |> 
+  dplyr::select(target, estimate, p.value, statistic)|> 
+  mutate(model = "m2")) |> 
+  pivot_wider(names_from = model, 
+              values_from = c(estimate, p.value, statistic)) |> 
+  ggplot(aes(-log2(p.value_m1), -log2(p.value_m2))) + 
+  geom_point(alpha = 0.4, color = "steelblue") + 
+  geom_abline(intercept = 0, slope = 1) + 
+  labs(x = "P-values non-informed models (log<sub>2</sub>)", 
+       y = "P-values regularized models (log<sub>2</sub>)") + 
+  theme(axis.title.x = ggtext::element_markdown(), 
+        axis.title.y = ggtext::element_markdown())
+
+
+cowplot::plot_grid(p1, p2, ncol = 2)
+
+```
+
+
+#### Age-related differences at baseline
+
+We first explore the age-related differences at baseline. Below we define two wrapper-functions to perform rank-based gene-set enrichment analysis using clusterProfiler [@xu2024a]. 
+
+```{r}
+#| code-fold: true
+
+# Get all genes belonging to Gene Ontology gene sets to allow for finding diff
+# genes not belonging to gene set.
+ 
+ bp_genes <- AnnotationDbi::select(
+  org.Hs.eg.db,
+  keys    = keys(org.Hs.eg.db, keytype = "ENTREZID"),
+  columns = "ONTOLOGY",
+  keytype = "ENTREZID"
+) |>
+  subset(ONTOLOGY == "BP") |>
+  _$ENTREZID |>
+  unique()
+ 
+ 
+ bp_genes <- bitr(bp_genes, "ENTREZID", "ENSEMBL", OrgDb = org.Hs.eg.db) |> 
+   pull(ENSEMBL)
+ 
+# A function to perform rank-based gene-set enrichment and find genes 
+# not included in the gene sets that are FDR < 0.05.
+#
+#
+# sums, a seqwrap summary table. 
+# coef, the coefficient of interest
+# setgenes, genes in the gene sets
+
+
+ 
+ 
+gsea_fun <- function(sums, coef, setgenes, ontology = "BP") {
+  
+  
+
+  # Create the statistics from the gene list
+  gene_list <- sums |> 
+    filter(term == coef )|>
+    # Separate for ensemble and symbol
+    separate_wider_regex(
+    target,
+    patterns = c(
+      ensembl  = "ENSG\\d+",
+      "\\.",
+      version  = "[^_]+",      
+      "_",
+      symbol   = ".+"
+    )
+  ) |> 
+    # Do FDR correction of the p-values
+    mutate(p.value = p.adjust(p.value, method = "BH")) |> 
+    # Arrange for the gsea
+    arrange(desc(statistic)) |>      # Troubleshooting revealed this needs to be in descending order, thus adding desc() - seems like this might be a packageversion thing
+    dplyr::select(symbol, ensembl, estimate, std.error, statistic, p.value) 
+  
+  # Compile gene list vector
+  geneList <- gene_list$statistic
+  names(geneList) <- as.character(gene_list$ensembl)
+  
+
+  # GSE ranked based
+  gse_res <- gseGO(
+    geneList = geneList,
+
+    OrgDb = org.Hs.eg.db,
+    ont = ontology,
+    
+   # method = "multilevel", # produces error, might stem from the same packageversion issue? Current fgsea/clusterProfiler defaults to the multilevel algorithm automatically for GSEA when eps = 0 (already in our call)
+   
+    keyType = "ENSEMBL",
+    minGSSize = 25,
+    maxGSSize = 500,
+    pvalueCutoff = 0.01,
+    nPermSimple = 10000,   # default is 1000
+    eps         = 0,       # remove the lower bound on reported p-values
+    verbose = FALSE
+  )
+  # Simplify the results
+  gse_res2 <- simplify(gse_res, cutoff = 0.5, by = "NES", 
+                       select_fun = function(x) x[which.max(abs(x))])
+  
+  data.frame(gse_res2) |> 
+    dplyr::select(Description, p.adjust, NES) |> 
+    arrange(p.adjust)
+ 
+ # Subset the gene_list to only contain genes not in genesets
+ # shortlisted on   
+ diff_genes <- gene_list |> 
+   filter(!(ensembl %in% setgenes )) |> 
+   filter(p.value < 0.01) |> 
+   arrange(-abs(estimate ))
+ 
+ 
+ 
+ 
+ # Output
+ out_list <- list(diff_genes_out = diff_genes, 
+                  gene_list = gene_list,
+                  gse_results_filtered = gse_res2, 
+                  gse_results = gse_res)
+ 
+
+ 
+}
+  
+
+
+# Function for plotting a enrichment score for specific gene sets
+#
+#
+gse_plot <- function(gseresults, genesets = c("GO:0042775", "GO:0000398"), 
+                     colscale = c("gray80", "#DE8F05", "#009E73")) {
+  
+  
+   # Get the running score
+  
+  pdat <- list()
+  for(i in seq_along(genesets)) {
+    
+    temp_dat <- enrichplot::gseaplot(gseresults, geneSetID = genesets[i])
+    pdat[[i]] <- temp_dat[[1]]$data
+    
+  }
+  
+
+   # Combine data set 
+   dat <- bind_rows(pdat) |> 
+     mutate(Description = stringr::str_to_sentence(Description), 
+            Description = gsub("mrna", "mRNA", Description), 
+            Description = fct_reorder(Description, runningScore, 
+                                      .fun = max))
+   
+   
+   p1 <- dat |> 
+     ggplot(aes(x, runningScore)) + 
+     geom_line(aes(color = Description)) +
+     scale_color_manual(values = colscale[-1]) +
+     theme_classic() + 
+     theme(axis.text.x = element_blank(), 
+           axis.title.x = element_blank(), 
+           axis.ticks.x = element_blank(), 
+           axis.line.x = element_blank(), 
+           legend.title = element_blank(), 
+           legend.position  = "top",
+            legend.direction = "vertical", 
+           legend.justification = "left") +
+     labs(y = "Enrichment score") + 
+     guides(color = guide_legend(reverse = TRUE))
+     
+
+  
+  p2 <-  dat |> 
+     ggplot(aes(x = x, xend = x, 
+                y = 0, yend = geneList)) + 
+     geom_segment(color = colscale[1]) + 
+
+      geom_segment(data = filter(dat, 
+                                position == 1), 
+                  aes(color = Description))  +
+     theme_classic() + 
+    scale_color_manual(values = colscale[-1])  + 
+    theme(legend.position = "none") + 
+    labs(y = "Contrast effect size\n(z-score)", 
+         x = "Gene rank position")
+     
+  
+   p <- cowplot::plot_grid(p1, p2, align = "v", 
+                     ncol = 1, 
+                     rel_heights = c(1, 0.6))
+  
+  return(p) 
+  
+}
+
+
+
+
+```
+
+
+```{r}
+#| label: fig-age-diff
+#| fig-cap: "Age-group differences in gene expression profiles at baseline."  
+
+
+
+# Perform gene set enrichment analysis
+gsearesults <- gsea_fun(sums = m2s$summaries, 
+         coef = "ageyoung", 
+         setgenes = bp_genes,
+         ontology = "BP")
+
+# Produced 11 warnings
+
+
+filtered_results <- gsearesults$gse_results_filtered |> 
+  data.frame() |> 
+  dplyr::select(Description, NES,enrichmentScore, p.adjust) |> 
+  arrange(-abs(NES)) 
+
+# Checking results after the sample-mapping error fix, are the same same GO IDs surfacing still?
+#data.frame(gsearesults$gse_results) |> 
+#  dplyr::filter(ID %in% c("GO:0002455", "GO:0000381")) |> 
+#  dplyr::select(ID, Description, NES, p.adjust)
+
+# All three previous hardcoded GO IDs are still genuinely significant, and appear in the final following plot. Only Oxidative Phosphorylation seems to survive to "filtered_results" though, so maybe the cutoff is to harsh?
+
+#filtered_results |> 
+#  filter(NES < 0) |> 
+#  arrange(p.adjust) |> 
+#  head(10)
+# This suggests filtered_results/simplify() collapses humoral/mRNA splicing to the parent terms
+
+flag_genes <- gsearesults$diff_genes_out |> 
+  pull(symbol)
+
+
+# Count differentially expressed genes
+n_diff_expressed <- m2s$summaries |> 
+  filter(term == "ageyoung") |> 
+   # Separate for ensemble and symbol
+    separate_wider_regex(
+    target,
+    patterns = c(
+      ensembl  = "ENSG\\d+",
+      "\\.",
+      version  = "[^_]+",      
+      "_",
+      symbol   = ".+"
+    )
+  ) |> 
+
+  mutate(log2estimate = estimate / log(2), 
+         p.value = p.adjust(p.value, method = "BH")) |> 
+  filter(p.value  < 0.05) |> 
+  summarise(n = n()) |> 
+  pull(n)
+  
+  
+
+
+
+p1 <- m2s$summaries |> 
+  filter(term == "ageyoung") |> 
+   # Separate for ensemble and symbol
+    separate_wider_regex(
+    target,
+    patterns = c(
+      ensembl  = "ENSG\\d+",
+      "\\.",
+      version  = "[^_]+",      
+      "_",
+      symbol   = ".+"
+    )
+  ) |> 
+
+  mutate(log2estimate = estimate / log(2), 
+         p.value = p.adjust(p.value, method = "BH"), 
+         flag = if_else(-log2(p.value) > 40, symbol, "")) |> 
+  ggplot(aes(log2estimate, -log2(p.value)))  + 
+  
+    geom_hline(yintercept = -log2(0.05), 
+             lty = 2, 
+             color = "gray") +
+  annotate("text", x = -2, y = -log2(0.05) + 1.5, 
+           label = "FDR 5%", 
+           size = 3, 
+           hjust = 0,
+           color = "gray") +
+  
+  geom_point(alpha = 0.3, 
+             color = "#0173B2") + 
+  
+  ggrepel::geom_text_repel(aes(label = flag), 
+                           size = 3) +
+  
+  theme_classic() + 
+  labs(x = "Estimate (log<sub>2</sub> difference Young - Old)", 
+       y = "log<sub>2</sub>(FDR)") + 
+  theme(axis.title.x = ggtext::element_markdown(),
+        axis.title.y = ggtext::element_markdown()) + 
+  scale_y_continuous(limits = c(0, 90), expand = c(0,0)) 
+
+  
+
+
+## Original baseline plot
+
+#p2 <- gse_plot(gsearesults$gse_results, 
+#         genesets = c("GO:0006119", "GO:0002455", "GO:0000381"), 
+#         colscale = c("gray80", "#DE8F05", "#009E73", "#0173B2", "#b24001"))
+
+
+#cowplot::plot_grid(p1, p2, ncol = 2, rel_widths = c(0.7, 1)) 
+
+## Category check following sample-swapping fix
+
+gsearesults <- gsea_fun(sums = m2s$summaries, 
+                         coef = "ageyoung", 
+                         setgenes = bp_genes,
+                         ontology = "BP")
+
+data.frame(gsearesults$gse_results) |> 
+  dplyr::filter(ID %in% c("GO:0006119",  # oxidative phosphorylation
+                           "GO:0140053",  # mitochondrial gene expression
+                           "GO:0002455",  # humoral immune response
+                           "GO:0000381",  # regulation of alternative mRNA splicing
+                           "GO:0006958",  # complement activation (candidate)
+                           "GO:0031507",  # heterochromatin formation (candidate)
+                           "GO:0045814")) |>  # negative regulation of gene expression, epigenetic (candidate)
+  dplyr::select(ID, Description, NES, p.adjust) |> 
+  dplyr::arrange(p.adjust)
+
+# CHANGED 2026-08-27 (KL) - DANIEL CHECK THIS: Two of the original 5 baseline categories (macrophage-derived foam cell differentiation, nuclear DNA replication) did not survive re-analysis after the t2/t3 sample-mapping correction (no longer present/significant in the GSEA results). Of the remaining categories, GO:0002455 (humoral immune response) is retained in spirit but replaced here with GO:0006958 (complement activation, classical pathway) - same broad immune-activation theme, more specific term, and a stronger p-value (p.adj 2.5e-4 vs 7.1e-4 for GO:0002455) under the current model. GO:0000381 (splicing) is replaced with GO:0031507 (heterochromatin formation) to better represent a potential "epigenetic/RNA regulation" framing. GO:0006119 (oxidative phosphorylation) is unchanged - strongest signal, still the clearest representative of the "young higher" energy-metabolism theme. 
+
+
+## Updated baseline plot
+
+p2 <- gse_plot(gsearesults$gse_results, 
+         genesets = c("GO:0006119", "GO:0006958", "GO:0031507"), 
+         colscale = c("gray80", "#DE8F05", "#009E73", "#0173B2", "#b24001"))
+
+
+
+cowplot::plot_grid(p1, p2, ncol = 2, rel_widths = c(0.7, 1)) 
+
+
+
+
+
+```
+
+
+```{r}
+
+# Using the full data set to create a correlation matrix 
+# based on residuals. The cor mat is used to get correlations to 
+# gene sets of non annotated genes. 
+
+
+cpm_dat <- cbind(data.frame(target = dat_filtered[,1]), data.frame(logcpm_y))
+
+# A summary function for retrieving residuals from models
+resid_sum <- function(m) {
+  out <- data.frame(resid = resid(m))
+  return(out)
+  }
+
+
+
+
+
+m3 <- seqwrap_compose(
+  data = cpm_dat, 
+  metadata = metadata2, 
+  modelfun = glmmTMB::glmmTMB, 
+  arguments = list(
+    formula = y ~ sex + age * tx + (1|participant)), 
+  summary_fun = resid_sum
+  )
+
+
+
+
+refit <- FALSE
+
+# Only refit model if it does not exists or the refit flag is 
+# set to TRUE.
+if(refit | !file.exists("data-out/m3-rnaseq.RDS") ) {
+ 
+  m3r <- seqwrap(
+   m3, 
+   cores = 12, 
+   return_models = FALSE
+  )
+
+ saveRDS(m3r, "data-out/m3-rnaseq.RDS")
+  
+  
+}
+
+m3r <- readRDS("data-out/m3-rnaseq.RDS")
+
+m3s <- seqwrap_summarise(m3r, verbose = FALSE)
+
+saveRDS(m3s$summaries, "data-out/m3-summaries.RDS")
+
+# CHANGED 2026-08-26: seqwrap update changed @summaries from a list
+# (one element per target, so length(m3r@summaries) == n targets) to a
+# single combined data.frame (all targets stacked). length(m3r@summaries)
+# now returns ncol (2), not the target count, which broke the rep() below.
+# Fixed by deriving the per-target sample count from m3s$summaries itself
+# and applying it within each target group instead of relying on the
+# old @summaries list length. Verified: 192 rows per target, confirmed
+# resids dims match expected 16878 x 193 post-fix.
+
+# resids <- m3s$summaries |> 
+#   mutate(seq_sample_id = rep(metadata2$seq_sample_id, length(m3r@summaries))) |> 
+#   pivot_wider(names_from = seq_sample_id, 
+#               values_from = resid) |> 
+#   data.frame()
+
+resids <- m3s$summaries |> 
+  mutate(seq_sample_id = rep(metadata2$seq_sample_id, times = n() / nrow(metadata2)), 
+         .by = target) |>
+  pivot_wider(names_from = seq_sample_id, 
+              values_from = resid) |> 
+  data.frame()
+
+
+ensembl <- resids |> 
+  dplyr::select(target) |> 
+   separate_wider_regex(
+    target,
+    patterns = c(
+      ensembl  = "ENSG\\d+",
+      "\\.",
+      version  = "[^_]+",      
+      "_",
+      symbol   = ".+"
+    ))  |> 
+  pull(ensembl)
+  
+  
+
+# Create the correlation matrix
+cor_mat <- cor(t(resids[,-1]))
+
+
+# Extract gene (ENSEMBL) with no annotation in gene ontology 
+# for correlation analysis
+non_annotated <- gsearesults$diff_genes_out |> 
+  arrange(p.value) |> 
+  pull(ensembl)
+
+
+colnames(cor_mat) <- ensembl
+
+cor_df <- data.frame( cor_mat) |> 
+  mutate(target = ensembl) |> 
+  dplyr::select(target, all_of(non_annotated)) 
+
+
+gsea_annotate <- function(k, ontology = "BP") {
+  
+  gene_id <- colnames(cor_df)[1+k]
+  
+  dat <- cor_df[,c(1, 1 + k)]  |> 
+    data.frame()
+  
+  gene_list <- dat |> 
+    dplyr::rename(correlation = 2) |> 
+#    arrange(-abs(correlation)) |> # sorts by absolute value, not actual, seemingly produced: simpleError condition: geneList should be a decreasing sorted vector..
+    arrange(desc(correlation)) |> #should fix the error above
+    filter(target != gene_id) 
+  
+   # Compile gene list vector
+  geneList <- gene_list$correlation
+  names(geneList) <- as.character(gene_list$target)
+  
+
+  # GSE ranked based
+  gse_res <- gseGO(
+    geneList = geneList,
+
+    OrgDb = org.Hs.eg.db,
+    ont = ontology,
+    
+    #method = "multilevel", # removed, same reason as in gsea_fun
+    
+    keyType = "ENSEMBL",
+    minGSSize = 25,
+    maxGSSize = 500,
+    pvalueCutoff = 0.01,
+    nPermSimple = 1000,   # default is 1000
+    eps         = 0,       # remove the lower bound on reported p-values
+    verbose = FALSE
+  )
+  
+  gse_res <- gse_res |> 
+    data.frame(row.names = NULL) |> 
+    dplyr::select(ID, Description, setSize, NES, p.adjust) |> 
+    arrange(-NES) |> 
+    mutate(target = gene_id)
+ 
+  return(gse_res)
+
+  
+}  
+
+
+refit <- FALSE
+
+# Only refit model if it does not exists or the refit flag is 
+# set to TRUE.
+if(refit | !file.exists("data-out/na-genesets-baseline.RDS") ) {
+ 
+  # Load libraries for parallel run 
+  library(furrr)
+  library(progressr)
+
+  # Initialize parallel session
+  plan(multisession, workers = 12)
+  ks <- seq_len(ncol(cor_df) - 1)
+
+
+with_progress({
+  p <- progressor(steps = length(ks))
+  
+  results <- future_map_dfr(
+    ks,
+    function(k, ontology = "BP") {
+      p()
+      gsea_annotate(k, ontology = ontology)
+    },
+    ontology = "BP",
+    .options = furrr_options(
+      seed = TRUE,
+      packages = c("clusterProfiler", "org.Hs.eg.db", "dplyr"),
+      globals = c("cor_df", "gsea_annotate", "p")
+    )
+  )
+})
+
+plan(sequential)
+
+ saveRDS(results, "data-out/na-genesets-baseline.RDS.RDS")
+  
+  
+}
+
+library(ggdendro)
+
+
+
+## Cluster the correlation of non-annotated genes
+
+
+
+higher_in_young <- gsearesults$diff_genes_out |> 
+  arrange(p.value) |> 
+  filter(estimate > 0) |> 
+  pull(ensembl)
+
+
+higher_in_old <- gsearesults$diff_genes_out |> 
+  arrange(p.value) |> 
+  filter(estimate < 0) |> 
+  pull(ensembl)
+  
+  
+
+
+# A function for clustering results from non-annotated genes
+#
+#
+# gene, a list of non-annotated genes
+# cor_df, the correlation data frame
+cluster_fun <- function(genes, cor_df, go_annotation) {
+  
+  # This subsets the correlations data frame for rows 
+  # representing non-annotated genes.
+  subset_cordf <- cor_df |> 
+  filter(target %in% genes) |> 
+    dplyr::select(target, all_of(genes))
+  
+  # The subset is converted to a matrix-like data frame
+  # and rownames are added.
+  cor_mat <- subset_cordf[,-1]
+  row.names(cor_mat) <- subset_cordf[,1]
+  
+  # Sorting the correlation matrix. This should place
+  # 1 on the diagonal. Convert to matrix.
+  cor_mat <- cor_mat[,rownames(cor_mat)]
+  cor_mat <- as.matrix(cor_mat)
+  # Check diagonal 
+  # diag(cor_mat)
+  
+  # Regularize the correlation matrix
+  cor_mat2 <- corpcor::cor.shrink(cor_mat)
+  
+  # Convert to distances and do clusters
+  d <- as.dist(1 - abs(cor_mat2))
+  
+  hc <- hclust(d, method = "ward.D2")
+  clusters <- cutree(hc, k = 6)
+  
+  # Save clusters for plotting
+  clusters_df <- data.frame(label = names(clusters), 
+           cluster = clusters, 
+           row.names = NULL)
+  
+  # Plot A -- The dendogram plot 
+  hcdat <- dendro_data(hc)
+
+  hcdat$labels <- hcdat$labels |> 
+    inner_join(clusters_df) |> 
+    mutate(label = fct_reorder(label, cluster))
+  
+ pa <- ggplot() +
+    geom_segment(data = segment(hcdat), 
+               aes(x = y, y = x, xend = yend, yend = xend)) +
+  #  geom_text(data = label(hcdat), 
+  #          aes(x = x, y = y, label = label, hjust = 0, color = as.factor(cluster)), 
+  #          size = 3) +
+    geom_point(data = label(hcdat), 
+               aes(x = y, y = x, color = as.factor(cluster) )) +
+    
+
+  scale_x_reverse(expand = c(0.2, 0)) + 
+    theme(axis.text.x = element_blank(), 
+          axis.ticks.x = element_blank(), 
+          axis.title.x = element_blank(), 
+          legend.position = "none")
+  
+  # Plot B --- Gene set scores
+  
+  # Find the highest scoring gene sets per cluster
+  ids <- go_annotation |> 
+      inner_join(clusters_df |> 
+               dplyr::rename(target = label)) |> 
+      summarise(.by = c(cluster, ID, Description), 
+            m = mean(NES, na.rm = TRUE), 
+            s = sd(NES, na.rm = TRUE), 
+            es = m/s)  |> 
+    # Filter NA in effect size (no standard deviations or mean normalized effect)
+    filter(!is.na(es)) |> 
+    # Get top N per cluster
+    slice_max(order_by = es, by = cluster, n = 2) |> 
+    mutate(ID = fct_reorder(ID, cluster)) |> 
+    pull(ID)
+    
+
+ pb <-  go_annotation |> 
+      inner_join(clusters_df |> 
+               dplyr::rename(target = label)) |> 
+         filter(ID %in% ids) |> 
+
+    inner_join(hcdat$labels |> 
+                 dplyr::rename(target = label)) |> 
+    mutate(NES = if_else(NES < 0, NES, 
+                         if_else(is.na(NES), min(NES), NES))) |> 
+    dplyr::select(ID, NES, x, y, cluster) |> 
+    pivot_wider(names_from = ID, 
+                values_from = NES) |> 
+    pivot_longer(names_to = "ID", values_to = "NES", cols = starts_with("GO")) |> 
+    mutate(NES = if_else(is.na(NES), 0, NES)) |> 
+        mutate(ID = factor(ID, levels = levels(ids))) |> 
+
+    ggplot(aes(y = x, x = ID)) + geom_tile(aes(fill = NES)) + 
+    theme(axis.text.x = element_text(angle = 45, hjust = 1), 
+          axis.text.y = element_blank(), 
+          axis.title.y = element_blank(), 
+          axis.ticks.y = element_blank())
+
+     
+ 
+ 
+ cowplot::plot_grid(pa, pb, align = "h")
+ 
+  
+  
+}
+
+
+
+ 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# Get top GO id from each cluster
+#results |> 
+
+
+
+
+
+
+
+results <- readRDS("data-out/na-genesets-baseline.RDS.RDS")
+
+results |> 
+  arrange(-NES) |> 
+  filter(p.adjust < 0.0001, 
+         NES > 0) |> 
+  summarize(.by = target, 
+            m = max(NES * -log2(p.adjust), na.rm = TRUE)) |> 
+  arrange(m)
+  ggplot(aes(target, m)) + geom_point()
+
+
+# 
+# go_annotation <- list() 
+# for(i in seq_along(non_annotated)) {
+# 
+#   go_annotation[[i]] <- gsea_annotate(k = i)
+# 
+#   cat("\r", i, "of", length(non_annotated))
+#   flush.console()   # forces immediate display, esp. in RStudio/Windows
+# }
+ 
+
+data.frame(gsearesults$gse_results) |> 
+  dplyr::filter(grepl("mitochondrial gene expression|foam cell differentiation|DNA replication", 
+                       Description, ignore.case = TRUE)) |> 
+  dplyr::select(ID, Description, NES, p.adjust) |> 
+  arrange(p.adjust)
+
+data.frame(gsearesults$gse_results) |> 
+  dplyr::filter(grepl("foam cell|DNA replication", Description, ignore.case = TRUE)) |> 
+  dplyr::select(ID, Description, NES, p.adjust) |> 
+  arrange(p.adjust)
+
+
+
+```
+
+<!-- Original write-up -->
+Comparing gene-expression profiles between age groups at baseline (Young - Old) revealed marked differences, with `r n_diff_expressed` genes showing robust differences between the groups (FDR < 5%, @fig-age-diff A). Rank-based gene-set enrichment analysis [@xu2024a] indicated that young participants had relatively higher expression of genes related to aerobic energy metabolism (e.g., oxidative phosphorylation and mitochondrial gene expression) and relatively lower expression of genes related to immune system activation (humoral immune response and macrophage-derived foam cell differentiation) and RNA processing and DNA replication (e.g., regulation of alternative mRNA splicing, via spliceosome and nuclear DNA replication; @fig-age-diff B).  
+
+<!--
+Possible update:
+Comparing gene-expression profiles between age groups at baseline (Young - Old) revealed marked differences, with `r n_diff_expressed` genes showing robust differences between the groups (FDR < 5%, @fig-age-diff A). Rank-based gene-set enrichment analysis [@xu2024a] indicated that young participants had relatively higher expression of genes related to aerobic energy metabolism (e.g., oxidative phosphorylation and mitochondrial gene expression) and relatively lower expression of genes related to immune system activation (e.g., complement activation and humoral immune response) and epigenetic regulation of gene expression (e.g., heterochromatin formation and regulation of alternative mRNA splicing, via spliceosome; @fig-age-diff B).
+
+-->
+#### Training effects
+
+Next up we explore the training effect. First, the goal is to see which of the 7 training contrasts shows the strongest overall signal (most genes at FDR <5%, largest typical effect sizes), then we can decide where to focus the deeper GSEA work. Here we'll be running tests on age difference in training response (e.g., young_old_t3 contrast) and age difference in volume-dependent training response (young_old_volume_t3 contrast), and the main effects (young_t3, old_t3).
+
+```{r}
+
+# Isolating contrast terms to get a sense of how many genes are significant for each
+
+training_contrasts <- m2s$summaries |> 
+  dplyr::filter(term %in% c("young_t3", "old_t3", "young_old_t3", 
+                             "mod_low_t3", "young_volume_t3", 
+                             "old_volume_t3", "young_old_volume_t3"))
+
+
+# FDR-correct within each contrast separately (each term is its own family of 16,878 tests)
+training_contrasts <- training_contrasts |> 
+  dplyr::mutate(p.adj = p.adjust(p.value, method = "BH"), .by = term)
+
+
+# Quick summary: how many genes are significant per contrast?
+training_contrasts |> 
+  dplyr::summarise(.by = term,
+                   n_sig_5pct = sum(p.adj < 0.05, na.rm = TRUE),
+                   n_sig_1pct = sum(p.adj < 0.01, na.rm = TRUE),
+                   median_abs_estimate = median(abs(estimate), na.rm = TRUE))
+
+
+
+```
+
+Both young (young_t3) and old (old_t3) show massive training effects: 3,503 and 4,241 genes at FDR <5% respectively (roughly 20-25% of the whoe filtered transcriptome), i.e., training from baseline to post (t3) produces a large, broad transcriptomal response in both age groups. Old shows slightly more genes and a somewhat smaller typical effect size (median |estimate| 0.061 vs. 0.075).
+
+The young_old_t3 (overall training response diff by age) is essentially null, 1 gene at 5% and 0 at 1%. With the huge main effect in each group, this near null interaction suggests the magnitude/direction of the transcriptional training response is broadly similar between young and old, even though each group responds strongly on its own, they're not responding differently from each other in a significant genome-wide way. 
+
+Old_volume_t3 = 1216 genes at FDR <5%, 114 at FDR <1%. This tells us that within the old group, moderate vs. low volume produces a real, detectable difference in gene expression at post - meaningful on its own. For the young, this same effect (young_volume_t3) is essentially null (1 gene), which probably explains why the overall volume effect (averaged over age, mod_low_t3) is weak, with 143 genes at 5% and 5 at 1%. The young_old_volume_t3 is completely null (0 genes at both thresholds).
+
+So put together, this shows that training produces a robust transcriptional response in both age groups, but volume only matters for the old group. 
+
+Since young_t3/old_t3 are the strongest and broadest signals, its the natural starting point for GSEA asking "what biological processes change with training in each age group". The old_volume_t3 is also quite interesting, asking "what's different about moderate vs. low volume specifically in the old". 
+
+```{r}
+
+# Re-using gsea_fun, simply swapping the coef argument
+
+gsearesults_young_t3 <- gsea_fun(sums = m2s$summaries,
+                                 coef = "young_t3",
+                                 setgenes = bp_genes,
+                                 ontology = "BP")
+
+# Produces 15 warnings
+
+
+gsearesults_old_t3 <- gsea_fun(sums = m2s$summaries, 
+                                coef = "old_t3", 
+                                setgenes = bp_genes,
+                                ontology = "BP")
+
+# Produces 15 warnings
+
+
+gsearesults_old_volume_t3 <- gsea_fun(sums = m2s$summaries, 
+                                          coef = "old_volume_t3", 
+                                          setgenes = bp_genes,
+                                          ontology = "BP")
+
+# Produces 14 warnings
+
+gsearesults_young_old_t3 <- gsea_fun(sums = m2s$summaries, 
+                                      coef = "young_old_t3", 
+                                      setgenes = bp_genes,
+                                      ontology = "BP")
+
+# Produces 15 warnings
+
+
+# Top-hits comparison between age groups training responses
+
+young_top <- data.frame(gsearesults_young_t3$gse_results_filtered) |> 
+  dplyr::select(ID, Description, NES, p.adjust) |> 
+  dplyr::arrange(dplyr::desc(abs(NES))) |> 
+  head(10)
+
+
+old_top <- data.frame(gsearesults_old_t3$gse_results_filtered) |> 
+  dplyr::select(ID, Description, NES, p.adjust) |> 
+  dplyr::arrange(dplyr::desc(abs(NES))) |> 
+  head(10)
+
+young_top
+old_top
+
+
+old_volume_top <- data.frame(gsearesults_old_volume_t3$gse_results_filtered) |> 
+  dplyr::select(ID, Description, NES, p.adjust) |> 
+  dplyr::arrange(dplyr::desc(abs(NES))) |> 
+  head(10)
+
+old_volume_top
+
+
+data.frame(gsearesults_young_old_t3$gse_results) |> 
+  dplyr::select(ID, Description, NES, p.adjust) |> 
+  dplyr::arrange(p.adjust) |> 
+  head(10)
+
+m2s$summaries |> 
+  dplyr::filter(term == "young_old_t3") |> 
+  dplyr::mutate(neglog2p = -log2(p.adjust(p.value, method = "BH"))) |> 
+  dplyr::summarise(max_val = max(neglog2p, na.rm = TRUE),
+                    p95 = quantile(neglog2p, 0.95, na.rm = TRUE),
+                    p99 = quantile(neglog2p, 0.99, na.rm = TRUE))
+
+# For inline reporting
+
+
+n_diff_expressed <- m2s$summaries |> 
+  dplyr::filter(term == "ageyoung") |> 
+  dplyr::mutate(p.adj = p.adjust(p.value, method = "BH")) |> 
+  dplyr::filter(p.adj < 0.05) |> 
+  nrow()
+
+
+n_sig_young_t3 <- m2s$summaries |> 
+  dplyr::filter(term == "young_t3") |> 
+  dplyr::mutate(p.adj = p.adjust(p.value, method = "BH")) |> 
+  dplyr::filter(p.adj < 0.05) |> 
+  nrow()
+
+n_sig_old_t3 <- m2s$summaries |> 
+  dplyr::filter(term == "old_t3") |> 
+  dplyr::mutate(p.adj = p.adjust(p.value, method = "BH")) |> 
+  dplyr::filter(p.adj < 0.05) |> 
+  nrow()
+
+n_sig_old_volume_t3 <- m2s$summaries |> 
+  dplyr::filter(term == "old_volume_t3") |> 
+  dplyr::mutate(p.adj = p.adjust(p.value, method = "BH")) |> 
+  dplyr::filter(p.adj < 0.05) |> 
+  nrow()
+
+# For figures
+
+saveRDS(gsearesults, "data-out/gsea-ageyoung.RDS")
+saveRDS(gsearesults_old_t3, "data-out/gsea-old-t3.RDS")
+
+saveRDS(gsearesults_young_t3, "data-out/gsea-young-t3.RDS")
+saveRDS(gsearesults_old_volume_t3, "data-out/gsea-old-volume-t3.RDS")
+
+saveRDS(gsearesults_young_old_t3, "data-out/gsea-young-old-t3.RDS")
+
+
+
+
+
+```
+
+
+#### Training effects fig
+
+```{r}
+
+# Finding the correct threshold of labelled genes
+
+# a threshold of 20 (just a starting point) resulted in 144 genes for young and 221 for old, which would make the volcano basically unreadable
+
+# Specific threshold testing
+
+thresholds <- c(30, 35, 40, 45, 50, 55, 60)
+
+purrr::map_dfr(thresholds, function(t) {
+  young_n <- m2s$summaries |> 
+    dplyr::filter(term == "young_t3") |> 
+    dplyr::mutate(neglog2p = -log2(p.adjust(p.value, method = "BH"))) |> 
+    dplyr::filter(neglog2p > t) |> 
+    nrow()
+  
+  old_n <- m2s$summaries |> 
+    dplyr::filter(term == "old_t3") |> 
+    dplyr::mutate(neglog2p = -log2(p.adjust(p.value, method = "BH"))) |> 
+    dplyr::filter(neglog2p > t) |> 
+    nrow()
+  
+  data.frame(threshold = t, young_n = young_n, old_n = old_n)
+})
+
+# 40 seems like a sweet spot = 8 genes for young and 18 for old. This asymmetry is a genuine reflection of the larger gene-count in old (4241 vs. 3503). 
+
+# Volcano Plots
+
+p1_young <- m2s$summaries |> 
+  filter(term == "young_t3") |> 
+  separate_wider_regex(
+    target,
+    patterns = c(
+      ensembl  = "ENSG\\d+",
+      "\\.",
+      version  = "[^_]+",      
+      "_",
+      symbol   = ".+"
+    )
+  ) |> 
+  mutate(log2estimate = estimate / log(2), 
+         p.value = p.adjust(p.value, method = "BH"), 
+         flag = if_else(-log2(p.value) > 40, symbol, "")) |> 
+  ggplot(aes(log2estimate, -log2(p.value)))  + 
+  geom_hline(yintercept = -log2(0.05), lty = 2, color = "gray") +
+  annotate("text", x = min(-2, na.rm=TRUE), y = -log2(0.05) + 1.5, 
+           label = "FDR 5%", size = 3, hjust = 0, color = "gray") +
+  geom_point(alpha = 0.3, color = "#0173B2") + 
+  ggrepel::geom_text_repel(aes(label = flag), size = 3, 
+                            max.overlaps = Inf, min.segment.length = 0) +   
+  theme_classic() + 
+  labs(x = "Estimate (log<sub>2</sub> change, baseline to t3)", 
+       y = "log<sub>2</sub>(FDR)",
+       title = "Young") + 
+  theme(axis.title.x = ggtext::element_markdown(),
+        axis.title.y = ggtext::element_markdown()) + 
+  scale_y_continuous(limits = c(0, 85), expand = c(0,0))   
+
+p1_old <- m2s$summaries |> 
+  filter(term == "old_t3") |> 
+  separate_wider_regex(
+    target,
+    patterns = c(
+      ensembl  = "ENSG\\d+",
+      "\\.",
+      version  = "[^_]+",      
+      "_",
+      symbol   = ".+"
+    )
+  ) |> 
+  mutate(log2estimate = estimate / log(2), 
+         p.value = p.adjust(p.value, method = "BH"), 
+         flag = if_else(-log2(p.value) > 40, symbol, "")) |> 
+  ggplot(aes(log2estimate, -log2(p.value)))  + 
+  geom_hline(yintercept = -log2(0.05), lty = 2, color = "gray") +
+  annotate("text", x = min(-2, na.rm=TRUE), y = -log2(0.05) + 1.5, 
+           label = "FDR 5%", size = 3, hjust = 0, color = "gray") +
+  geom_point(alpha = 0.3, color = "#0173B2") + 
+  ggrepel::geom_text_repel(aes(label = flag), size = 3, 
+                            max.overlaps = Inf, min.segment.length = 0) +   
+  theme_classic() + 
+  labs(x = "Estimate (log<sub>2</sub> change, baseline to t3)", 
+       y = "log<sub>2</sub>(FDR)",
+       title = "Old") + 
+  theme(axis.title.x = ggtext::element_markdown(),
+        axis.title.y = ggtext::element_markdown()) + 
+  scale_y_continuous(limits = c(0, 85), expand = c(0,0))   
+
+
+# Side-by-side
+cowplot::plot_grid(p1_young, p1_old, ncol = 2)
+
+# Stacked
+cowplot::plot_grid(p1_young, p1_old, ncol = 1)
+
+
+```
+
+
+These volcano plots actually corroborate the GSEA results quite well. Almost every labelled gene in both panels is a collagen/ECM/basement-membrane gene (COL4A1, COL4A2, LAMB1, LAMA4, COL5A2, COL3A1, COL1A2, COL6A3, NID2, SPARC, PXDN), fitting the "training up-regulates ECM/connective tissue remodelling" pattern from the GSEA top-10 tables. Notably, the plot for old invidivuals shows a slightly more varied set beyond pure ECM, but this is still consistent with the old_t3's secondary coagulation/vascular theme - PECAM1 is a classic vascular/platelet endothelial marker, fitting the "regulation of coagulation"/"cellular extravasation" GO hits found only in old.
+
+Making a GSEA panel in addition: one representative GSEA panel using old_t3 with "shared between groups" point carried in text, rather than a dual-line overlay. <!-- Keeps the fig clean and consistent with the baseline fig structure -->
+
+```{r}
+
+# GSAE plot
+
+gsearesults_old_t3 <- gsea_fun(sums = m2s$summaries, 
+                                coef = "old_t3", 
+                                setgenes = bp_genes,
+                                ontology = "BP")
+
+p2_training <- gse_plot(gsearesults_old_t3$gse_results, 
+         genesets = c("GO:0008380", "GO:0007229", "GO:0022613"), 
+         colscale = c("gray80", "#DE8F05", "#009E73", "#0173B2"))
+
+
+
+p2_training
+
+
+# Volcano + gsea
+
+cowplot::plot_grid(
+  cowplot::plot_grid(p1_young, p1_old, ncol = 2),
+  p2_training,
+  ncol = 1,
+  rel_heights = c(0.8, 1.6)
+)
+
+# Might be worth to consider just having them as two separate
+
+```
+
+#### Results
+
+Comparing gene-expression profiles between age groups at baseline (Young - Old) revealed marked differences, with `r n_diff_expressed` genes showing robust differences between the groups (FDR < 5%, fig ..). Rank-based gene-set enrichment analysis [@xu2024a] indicated that young participants had relatively higher expression of genes related to aerobic energy metabolism (e.g., oxidative phosphorylation and mitochondrial gene expression) and relatively lower expression of genes related to immune system activation (e.g., complement activation and humoral immune response) and epigenetic regulation of gene expression (e.g., heterochromatin formation and regulation of alternative mRNA splicing, via spliceosome; fig ..)
+
+Training induced a large, broad transcriptional response in both age groups: `r n_sig_young_t3` genes changed from baseline to t3 in young participants, and `r n_sig_old_t3` in old participants (FDR < 5%, fig ..). Individual genes with the strongest training-induced changes were predominantly collagen and basement-membrane genes in both groups (e.g., COL4A1, COL4A2, LAMB1, PXDN in young; COL4A1, LAMA4, COL3A1, COL1A2, SPARC in old; fig ..), consistent with an extracellular matrix (ECM) remodeling response to resistance training.
+
+Rank-based gene-set enrichment analysis [@xu2024a] showed that the dominant biology of the training response was remarkably similar between age groups: 6 of the top 10 enriched categories were shared, with matching direction and comparable magnitude in both young and old (RNA splicing, ribonucleoprotein complex biogenesis, integrin-mediated signaling pathway, cell adhesion mediated by integrin, collagen metabolic process, and mRNA transport; fig ..). Training up-regulated genes related to ECM/connective tissue remodeling (e.g., integrin-mediated signaling and adhesion, collagen metabolic process) and down-regulated genes related to RNA-processing and ribosome biogenesis (e.g., RNA splicing, ribonucleoprotein complex biogenesis, mRNA transport) in both groups. <!--This similarity in the transcriptional training response was consistent with the age × time interaction contrast showing essentially no significant genes, indicating that the near-null interaction reflects genuinely similar biology between age groups rather than a lack of statistical power.--> A smaller set of categories differed by age: young participants showed additional enrichment for cytoplasmic translation, mesenchymal cell migration, and angiogenesis, while old participants showed additional enrichment for coagulation- and vascular-related categories. <!--(regulation of coagulation, cellular extravasation, regulation of blood coagulation) — reflected in old participants' volcano plot by genes such as PECAM1, a canonical vascular/platelet-endothelial marker (@fig-training-volcano).-->
+
+In contrast to the broadly age-independent training effect, the effect of training volume (moderate vs. low) was age-dependent: a substantial number of genes differed by volume in old participants (`r n_sig_old_volume_t3` genes, FDR < 5%), while essentially no genes showed a volume effect in young participants. Among old participants, higher training volume was associated with relatively higher expression of genes related to mitochondrial biogenesis and oxidative metabolism (e.g., inner mitochondrial membrane organization, respiratory electron transport chain, purine-containing compound biosynthesis) and relatively lower expression of genes related to muscle contractile function and translation (e.g., skeletal muscle contraction, cytoplasmic translation, muscle organ development, striated muscle cell differentiation, ribosomal small subunit biogenesis). This volume effect was considerably more modest than the main training effect, both in the number of genes involved and in statistical strength. <!--(FDR values several orders of magnitude weaker than the training-effect contrasts).-->
+
+
+
+
