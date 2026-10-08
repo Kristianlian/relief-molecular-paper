@@ -1,5 +1,4 @@
-
-## Study design + Exercise Figure
+## Study design + Exercise Figure (molecular paper)
 
 #' ---
 #' title: Figure 1 (study design and weekly training volume)
@@ -13,6 +12,7 @@ library(tidyverse)
 library(cowplot)
 library(readxl)
 library(png)
+library(magick)
 
 # ── Shared aesthetics ────────────────────────────────────────────────────────
 col_yng <- "#2166ac"
@@ -38,29 +38,21 @@ stextsize <- 1.7
 
 
 # --- LOAD IMAGES + DATA ------------------------------------------------------
+# Only the modalities relevant to the molecular paper are kept: biopsy and RT.
 
-dxaimg <- readPNG(here("figures/archive/dxa.fig.png"))
 biopsyimg <- readPNG(here("figures/archive/biopsy.fig.png"))
-gtimg <- readPNG(here("figures/archive/blood.vial.png"))
-mriimg <- readPNG(here("figures/archive/mri.png"))
-strimg <- readPNG(here("figures/archive/str.png"))
 rtimg <- readPNG(here("figures/archive/rt.fig.png"))
 
 d.dat <- read_excel(here("data/design.dat.xlsx"), na = "NA")
 
 
-# --- PANEL A1: Recruitment flowchart (no time axis, tightened y-range) -------
+# --- PANEL A1: Recruitment flowchart (unchanged) -----------------------------
 
 flow_arrow <- arrow(length = unit(0.09, "inches"), type = "closed")
 
 panel_A1 <- ggplot() +
   scale_y_continuous(limits = c(4.5, 10), expand = c(0, 0)) +
   scale_x_continuous(limits = c(0, 19), expand = c(0, 0)) +
-  
-#  geom_rect(
-#    aes(xmin = 0, xmax = 19, ymin = 4.5, ymax = 10),
-#    fill = "#f0f4f8", color = "#f0f4f8", linewidth = 0, inherit.aes = FALSE
-#  ) +
   
   annotate("text", x = 9.5, y = 9.7, label = "Recruitment", size = htextsize) +
   
@@ -109,29 +101,17 @@ panel_A1 <- ggplot() +
   theme_void()
 
 
-# --- LEGEND STRIP: icon key, sits between Panel A and Panel B ----------------
+# --- LEGEND STRIP: icon key (two icons, centred) -----------------------------
 
 panel_legend <- ggplot() +
   scale_y_continuous(limits = c(0, 2.2), expand = c(0, 0)) +
   scale_x_continuous(limits = c(0, 7), expand = c(0, 0)) +
   
-  draw_image(dxaimg,    x = 0.7, y = 1.3, scale = .5, hjust = 0.5, vjust = 0.5) +
-  annotate("text", x = 0.7, y = 0.75, label = "DXA/US", size = textsize) +
+  draw_image(biopsyimg, x = 2.9, y = 1.3, scale = .5, hjust = 0.5, vjust = 0.5) +
+  annotate("text", x = 2.9, y = 0.75, label = "Biopsy", size = textsize) +
   
-  draw_image(biopsyimg, x = 1.9, y = 1.3, scale = .5, hjust = 0.5, vjust = 0.5) +
-  annotate("text", x = 1.9, y = 0.75, label = "Biopsy", size = textsize) +
-  
-  draw_image(gtimg,     x = 3.1, y = 1.3, scale = .5, hjust = 0.5, vjust = 0.5) +
-  annotate("text", x = 3.1, y = 0.75, label = "OGGT", size = textsize) +
-  
-  draw_image(mriimg,    x = 4.3, y = 1.3, scale = .5, hjust = 0.5, vjust = 0.5) +
-  annotate("text", x = 4.3, y = 0.75, label = "MRI", size = textsize) +
-  
-  draw_image(strimg,    x = 5.5, y = 1.3, scale = .5, hjust = 0.5, vjust = 0.5) +
-  annotate("text", x = 5.5, y = 0.75, label = "STR", size = textsize) +
-  
-  draw_image(rtimg, x = 6.5, y = 1.3, scale = .45, hjust = 0.5, vjust = 0.5) +
-  annotate("text", x = 6.5, y = 0.75, label = "RT", size = textsize) +
+  draw_image(rtimg,     x = 4.1, y = 1.3, scale = .45, hjust = 0.5, vjust = 0.5) +
+  annotate("text", x = 4.1, y = 0.75, label = "RT", size = textsize) +
   
   theme_void()
 
@@ -153,14 +133,15 @@ exer_session <- exer.dat |>
   summarise(.by = c(participant, session, exercise, condition, leg, age_group, allocation),
             session_vl = sum(vl, na.rm = TRUE))
 
-# Week mapping: weeks 2-6 at 2 sessions/week (sessions 1-10),
-# weeks 6-11 at 3 sessions/week (sessions 11-24, week 10 partial with 2 sessions)
+# Week mapping: sessions 1-10 at 2/week, sessions 11-24 at 3/week
+# (final training week has 2 sessions). After the +1 shift: baseline = week 1,
+# training = weeks 2-11, post = week 12.
 exer_week <- exer_session |>
   mutate(week = case_when(
     session <= 10 ~ ceiling(session / 2),
     session > 10  ~ 5 + ceiling((session - 10) / 3)
   )) |>
-  mutate(week = week + 1) |>   # shift so baseline = week 1, training = weeks 2-11
+  mutate(week = week + 1) |>
   summarise(.by = c(participant, week, exercise, condition, age_group, allocation),
             week_vl = sum(session_vl, na.rm = TRUE))
 
@@ -175,7 +156,7 @@ exer_week_summary <- exer_week |>
   mutate(age_group = factor(age_group, levels = c("yng", "old"), labels = c("Young", "Old")),
          condition = factor(condition, levels = c("low", "mod"), labels = c("Low", "Moderate")))
 
-guide_weeks <- c(1, 6.5, 12)   # baseline, mid, post
+guide_weeks <- c(1, 4, 12)   # baseline, week-3 biopsy, post
 
 label_y <- 23500   # shared top-anchor for every timepoint label
 
@@ -188,48 +169,34 @@ panel_B <- exer_week_summary |>
   geom_line(linewidth = 0.7) +
   geom_point(size = 1.8) +
   
-  # Baseline & training start
+  # Baseline biopsy
   annotate("text", x = 1, y = label_y, label = "Baseline",
            size = textsize, vjust = 1) +
-  draw_image(dxaimg,    x = 1, y = 21800, scale = 1400, hjust = 0.5, vjust = 0.5) +
-  draw_image(biopsyimg, x = 1, y = 19800, scale = 1400, hjust = 0.5, vjust = 0.5) +
-  draw_image(gtimg,     x = 1, y = 17800, scale = 1400, hjust = 0.5, vjust = 0.5) +
-  draw_image(mriimg,    x = 1, y = 15800, scale = 1400, hjust = 0.5, vjust = 0.5) +
-  draw_image(strimg,    x = 1.5, y = 13800, scale = 1400, hjust = 0.5, vjust = 0.5) + 
+  draw_image(biopsyimg, x = 1, y = 21800, scale = 1400, hjust = 0.5, vjust = 0.5) +
   
-  # RT — RT start marker
+  # RT start
   annotate("text", x = 2, y = label_y, label = "RT starts",
            size = textsize, lineheight = 0.8, vjust = 1) +
   draw_image(rtimg, x = 2, y = 21800, scale = 1700, hjust = 0.5, vjust = 0.5) +
   
-  # Mid-testing
-  annotate("text", x = 6.5, y = label_y, label = "Half-way",
-           size = textsize, vjust = 1) +
-  draw_image(strimg, x = 6.1, y = 21800, scale = 1400, hjust = 0.5, vjust = 0.5) +
-  draw_image(dxaimg, x = 6.9, y = 21800, scale = 1400, hjust = 0.5, vjust = 0.5) +
-  
-  # Week 3 biopsy
+  # Week-3 biopsy (after six sessions)
   annotate("text", x = 4, y = label_y, label = "Biopsy",
            size = textsize, lineheight = 0.8, vjust = 1) +
   draw_image(biopsyimg, x = 4, y = 21800, scale = 1400, hjust = 0.5, vjust = 0.5) +
   
-  # Post-testing
+  # Post biopsy
   annotate("text", x = 12, y = label_y, label = "Post",
            size = textsize, vjust = 1) +
-  draw_image(dxaimg,    x = 12, y = 21800, scale = 1400, hjust = 0.5, vjust = 0.5) +
-  draw_image(biopsyimg, x = 12, y = 19800, scale = 1400, hjust = 0.5, vjust = 0.5) +
-  draw_image(gtimg,     x = 12, y = 17800, scale = 1400, hjust = 0.5, vjust = 0.5) +
-  draw_image(mriimg,    x = 12, y = 15800, scale = 1400, hjust = 0.5, vjust = 0.5) +
-  draw_image(strimg,    x = 11.5, y = 13800, scale = 1400, hjust = 0.5, vjust = 0.5) + 
+  draw_image(biopsyimg, x = 12, y = 21800, scale = 1400, hjust = 0.5, vjust = 0.5) +
   
   scale_color_manual(values = c(Young = col_yng, Old = col_old), name = "Age group") +
   scale_fill_manual(values = c(Young = col_yng, Old = col_old), guide = "none") +
   scale_linetype_manual(values = c(Low = "solid", Moderate = "dashed"), name = "Volume") +
-  scale_x_continuous(limits = c(0.8, 12.7), breaks = c(1, 2, 4, 6.5, 11, 12),
-                     labels = c("1", "2", "4", "6.5", "11", "12"), expand = c(0.01, 0.01)) +
+  scale_x_continuous(limits = c(0.8, 12.7), breaks = c(1, 2, 4, 11, 12),
+                     labels = c("1", "2", "4", "11", "12"), expand = c(0.01, 0.01)) +
   scale_y_continuous(limits = c(0, 25500)) +
   coord_cartesian(clip = "off") +
-  labs(x = "Week", y = "Volume load (kg x reps)") +   # title removed
+  labs(x = "Week", y = "Volume load (kg x reps)") +
   base_theme +
   theme(legend.position = "bottom",
         legend.box = "horizontal",

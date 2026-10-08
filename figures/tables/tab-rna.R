@@ -4,7 +4,7 @@ library(tidyverse)
 library(gt)
 
 pred_rna              <- readRDS("data/data-gen/pred_rna.rds")
-contrast_summary_rep  <- readRDS("data/data-gen/rna_mg_contrast_summary_m4.rds")
+contrast_summary_rep  <- readRDS("data/data-gen/rna_mg_contrast_summary_m5.rds")
 contrast_rna          <- readRDS("data/data-gen/contrast_rna.rds")
 
 tx_labels <- c(
@@ -84,8 +84,8 @@ table_rna <- table_data |>
   sub_missing(columns = c(baseline, abs_change, abs_lower95, abs_upper95), missing_text = "\u2014") |>
   cols_merge(columns = c(abs_change, abs_lower95, abs_upper95), pattern = "{1} [{2}, {3}]") |>
   cols_merge(columns = c(pct_change, pct_lower, pct_upper), pattern = "{1}% [{2}%, {3}%]") |>
-  cols_label(row_label = "Group / Contrast", baseline = "Baseline (ng)",
-             abs_change = "\u0394 (ng, 95% ETI)", pct_change = "\u0394 (%, 95% ETI)", pos = "pos") |>
+  cols_label(row_label = "Group / Contrast", baseline = "Baseline (ng/mg)",
+             abs_change = "\u0394 (ng/mg, 95% CI)", pct_change = "\u0394 (%, 95% CI)", pos = "pos") |> 
   tab_header(title = "Total RNA: change by group and timepoint, and between-group contrasts")
 
 table_rna

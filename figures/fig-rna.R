@@ -1,14 +1,21 @@
-## Protein Figure
+## Total RNA figure
 
 library(tidyverse)
 library(patchwork)
 
-# --- Load saved data ---
-pred_ubf      <- readRDS("data/data-gen/pred_ubf.rds")
-contrast_ubf  <- readRDS("data/data-gen/contrast_ubf.rds")
 
-pred_cmyc_high     <- readRDS("data/data-gen/pred_cmyc_high.rds")
-contrast_cmyc_high <- readRDS("data/data-gen/contrast_cmyc_high.rds")
+# --- Load saved data ---
+
+pred_rna              <- readRDS("data/data-gen/pred_rna.rds")
+contrast_rna          <- readRDS("data/data-gen/contrast_rna.rds")
+contrast_summary      <- readRDS("data/data-gen/rna_mg_contrast_summary_m5.rds")
+
+contrast_summary |>
+  mutate(across(c(fc_est, fc_lower, fc_upper), ~ round((.x - 1) * 100, 2)),
+         pos = round(pos, 4)) |>
+  select(contrast, fc_est, fc_lower, fc_upper, pos) |>
+  print(n = Inf, width = Inf)
+
 
 # --- Shared contrast setup ---
 
@@ -35,13 +42,13 @@ tx_names <- names(tx_labels)
 
 # --- Credible-change markers, per outcome ---
 
-credible_ubf <- contrast_ubf |>
-  filter(hypothesis %in% paste0(tx_names, "_delta"), credible == "Yes") |>
-  transmute(tx = str_remove(hypothesis, "_delta$"), time = "w3")
-
-credible_cmyc <- contrast_cmyc_high |>
-  filter(hypothesis %in% paste0(tx_names, "_delta"), credible == "Yes") |>
-  transmute(tx = str_remove(hypothesis, "_delta$"), time = "w3")
+credible_rna <- contrast_summary |>
+  filter(contrast %in% paste0(rep(tx_names, each = 2), "_", c("w3", "post"))) |>
+  mutate(tx   = str_remove(contrast, "_(w3|post)$"),
+         time = str_extract(contrast, "(w3|post)$"),
+         credible = fc_lower > 1 | fc_upper < 1) |>
+  filter(credible) |>
+  select(tx, time)
 
 
 # --- Reusable builder functions ---
@@ -78,44 +85,51 @@ make_left_panel <- function(pred_dat, ylab, time_levels, credible_dat = NULL) {
     theme_classic()
 }
 
-# Single-delta right panel (UBF, c-Myc — only pre -> w3 exists)
-make_right_panel <- function(contrast_dat) {
-  contrast_dat |>
+# Dual-delta right panel (RNA — pre -> w3 AND pre -> post both shown)
+make_right_panel_dual <- function(contrast_dat) {
+  plot_data <- contrast_dat |>
     filter(hypothesis %in% key_contrasts) |>
-    mutate(hypothesis = factor(hypothesis, levels = rev(key_contrasts)),
-           pos_label = paste0(round(pos * 100), "%")) |>
-    ggplot(aes(y = hypothesis)) +
+    mutate(
+      tp   = factor(delta, levels = c("pre to post", "pre to w3"),
+                    labels = c("Pre-Post", "Pre-W3")),
+      hypothesis = factor(hypothesis, levels = rev(key_contrasts)),
+      row_label  = paste(hypothesis, tp, sep = " | "),
+      pos_label  = paste0(round(pos * 100), "%")
+    ) |>
+    arrange(hypothesis, desc(tp)) |>
+    mutate(row_label = factor(row_label, levels = unique(row_label))) |>
+    mutate(row_label_display = if_else(tp == "Pre-Post",
+                                       as.character(contrast_labels[as.character(hypothesis)]),
+                                       ""))
+  
+  plot_data |>
+    ggplot(aes(y = row_label)) +
     geom_vline(xintercept = 1, linetype = 2, color = "grey40") +
-    geom_pointrange(aes(x = mean, xmin = lower95, xmax = upper95),
-                    color = "steelblue", linewidth = 0.8, size = 0.6) +
+    geom_pointrange(aes(x = mean, xmin = lower95, xmax = upper95, color = tp),
+                    linewidth = 0.8, size = 0.5) +
     geom_text(aes(x = upper95, label = pos_label),
               hjust = -0.2, size = 3, color = "grey30") +
-    scale_y_discrete(labels = contrast_labels) +
+    scale_y_discrete(labels = setNames(plot_data$row_label_display, plot_data$row_label)) +
+    scale_color_manual(values = c("Pre-W3" = "grey60", "Pre-Post" = "steelblue"),
+                       name = "Timepoint") +
     scale_x_continuous(expand = expansion(mult = c(0.05, 0.15))) +
     labs(x = "Ratio (post/pre)", y = NULL) +
     theme_classic() +
-    theme(axis.text.y = element_text(size = 9))
+    theme(axis.text.y = element_text(size = 8),
+          legend.position = "top")
 }
-
 
 
 # --- Build panels ---
 
-p_left_ubf   <- make_left_panel(pred_ubf, "UBF (corrected area)", c("pre", "w3"), credible_ubf)
-p_right_ubf  <- make_right_panel(contrast_ubf)
+p_left_rna   <- make_left_panel(pred_rna, "Total RNA (ng)", c("pre", "w3", "post"), credible_rna)
+p_right_rna  <- make_right_panel_dual(contrast_rna)
 
-p_left_cmyc  <- make_left_panel(pred_cmyc_high, "c-Myc, high peak\n(corrected area)", c("pre", "w3"), credible_cmyc)
-p_right_cmyc <- make_right_panel(contrast_cmyc_high)
+p_rna <- (p_left_rna  + p_right_rna  + plot_layout(widths = c(2, 1)))
 
+p_rna
 
-# --- Combine: 3-row grid ---
+ggsave("figures/fig-rna.png", p_rna,
+       width = 10, height = 6, dpi = 300)
 
-p_protein <- (p_left_ubf  + p_right_ubf  + plot_layout(widths = c(2, 1))) /
-  (p_left_cmyc + p_right_cmyc + plot_layout(widths = c(2, 1))) 
-
-p_protein
-
-ggsave("figures/fig-protein.png", p_protein,
-       width = 10, height = 15, dpi = 300)
-
-saveRDS(p_protein, "figures/fig-protein.RDS")
+saveRDS(p_rna, "figures/fig-rna.RDS")
