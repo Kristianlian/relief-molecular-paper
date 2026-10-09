@@ -1,0 +1,2294 @@
+---
+title: "Protein Analysis"
+format: html
+editor: source
+editor_options: 
+  chunk_output_type: console
+---
+
+
+```{r}
+#| label: packages-and-settings
+#| eval: true
+#| message: false
+#| warning: false
+#| echo: true
+
+# Loading packages
+library(brms)
+library(marginaleffects)
+library(tidyverse)
+library(reliefdata)
+
+
+# This setting disables a safety warning message for the marginaleffects package
+# we should still confirm the order of effects for the contrasts
+options(marginaleffects_safe = FALSE)
+
+
+```
+
+
+### Western - UBF and c-Myc
+
+
+1.  Within condition (low- and moderate-volume, and non-training control conditions) change from baseline.
+2.  Differences between age-groups at baseline.
+3.  Average between age-group differences in change from baseline (young vs. old in the intervention group)
+4.  Average between control- vs. intervention-group changes from baseline.
+5.  Average effect of condition in the intervention groups (low- vs. moderate volume)
+6.  Differences between age-groups in effect of condition.
+
+The first contrast will be built for descriptive purposes and serves as the building block for comparisons in contrast 3-4.
+
+### UBF
+
+#### Data
+
+In the code chunk below we plot the data grouped by participant leg.
+
+```{r}
+
+# Data
+
+west.dat <- reliefdata::relief_western |> 
+  mutate(participant = as.character(participant)) |> 
+  select(participant, leg, sampleid = sample, time, capillary, peak,
+         protein, position, mw_kda, height, area, area_p, corr.area,
+         width, plate) |> 
+  filter(!sampleid %in% c("Biot. Ladder", "DDH2O"),
+         !participant %in% c("3084", "3090")) |>  #no measurement
+  print()
+
+condition <- reliefdata::relief_volume |> 
+  mutate(participant = as.character(participant))
+
+participants <- reliefdata::relief_participants |> 
+  mutate(age_group = if_else(age < 40, "yng", "old")) |> 
+  select(participant, age, sex, allocation, age_group)
+
+
+ubf.dat <- west.dat |> 
+  full_join(condition) |> 
+  select(-arm) |> 
+  full_join(participants) |> 
+  filter(!is.na(sampleid), #filters out NA's introduced by joining, since not both legs are represented at pre
+         protein == "UBF") |> 
+  mutate(corr.area = as.numeric(corr.area)) |> 
+  mutate(y = log(corr.area),
+         ystd = (y - mean(y, na.rm = TRUE)) / sd(y, na.rm = TRUE),
+         condition = if_else(allocation == "con", "con", condition),
+         tx = paste0(allocation, "_", age_group, "_", condition),
+         tx = factor(tx, levels = c("int_old_low","int_old_mod", "int_yng_low","int_yng_mod", "con_old_con")),
+         tx_sex = paste0(tx, "_", sex),
+         tx_sex = factor(tx_sex, levels = c(
+           "int_old_low_female", "int_old_low_male",
+           "int_old_mod_female", "int_old_mod_male", 
+           "int_yng_low_female", "int_yng_low_male",
+           "int_yng_mod_female", "int_yng_mod_male", 
+           "con_old_con_female", "con_old_con_male"
+         )),
+         time = factor(time, levels = c("pre", "w3")),
+         sex_centered = if_else(sex == "female", -0.5, 0.5)) |> 
+  print()
+
+ 
+
+## Save sd and mean for back transform
+mean_ubf <- mean(ubf.dat$y, na.rm = TRUE)
+sd_ubf   <- sd(ubf.dat$y, na.rm = TRUE)
+
+
+# A preliminary figure of observed data
+
+ubf.dat |> 
+  # Change factor names for plotting
+  mutate(time = factor(time, labels = c("Pre", "Week 3")), 
+         age_group = factor(age_group, labels = c("Old", "Young")), 
+         allocation = factor(allocation, labels = c("Control", "Intervention") ), 
+         sex = factor(sex, labels = c("Female", "Male"))) |> 
+  
+  ggplot(aes(time, corr.area,
+             color = sex,
+             group = paste(participant, leg))) + 
+  geom_line() + 
+  facet_wrap(~ paste(age_group, allocation))  + 
+  labs(x = "", y = "Corrected Area UBF") + 
+  theme(axis.title.y = ggtext::element_markdown())
+
+
+
+
+```
+
+#### Models
+
+```{r}
+form0 <- bf(ystd ~   0 + tx + tx:time + sex + (1|participant))
+form1 <- bf(ystd ~  time + allocation + allocation:time +  (1|participant) +  (1|participant:leg) + (time | tx_sex))
+form2 <- bf(ystd ~   0 + tx_sex + tx_sex:time  + (1 + time|participant) +  (1|participant:leg))
+form3 <- bf(ystd ~   time + allocation + allocation:time +  (1 + time|participant) +  (1|participant:leg) + (time | tx_sex))
+
+
+# Priors
+get_prior(form0, data = ubf.dat)
+get_prior(form1, data = ubf.dat)
+get_prior(form2, data = ubf.dat)
+get_prior(form3, data = ubf.dat)
+
+pri0 <- c(
+  # Sex diffs
+  prior(normal(0, 1), class = "b", coef = "sexmale"), 
+  # Group-level intercepts - all parameters specifically referenced
+  prior(normal(0, 1), class = "b", coef = "txcon_old_con"), 
+  prior(normal(0, 1), class = "b", coef = "txint_old_low"), 
+  prior(normal(0, 1), class = "b", coef = "txint_old_mod"), 
+  prior(normal(0, 1), class = "b", coef = "txint_yng_low"), 
+  prior(normal(0, 1), class = "b", coef = "txint_yng_mod"),
+  
+  # time-Post effects
+  prior(normal(0, 1), class = "b", coef = "txcon_old_con:timew3"), 
+  prior(normal(0, 1), class = "b", coef = "txint_old_low:timew3"), 
+  prior(normal(0, 1), class = "b", coef = "txint_old_mod:timew3"), 
+  prior(normal(0, 1), class = "b", coef = "txint_yng_low:timew3"), 
+  prior(normal(0, 1), class = "b", coef = "txint_yng_mod:timew3"),
+  
+  # Random effect (participant)
+  prior(exponential(1), class = sd), 
+  
+  prior(exponential(1), class = sigma)
+)
+
+
+pri1 <- c(
+  
+  # Intercept + global time slope
+  prior(normal(0, 1), class = "Intercept"), 
+  prior(normal(0, 1), class = "b"), 
+  
+  # Correlations of varying effects within groups
+  #prior(lkj(2), class = "cor", group = "tx_sex"),
+  
+  # Random effect (participant)
+  prior(exponential(1), class = sd), 
+  
+  prior(exponential(1), class = sigma)
+  
+)
+
+
+pri2 <- c(
+  
+  # All fixed effects
+  prior(normal(0, 1), class = "b"), 
+
+  prior(lkj(2), class = "cor", group = "participant"),
+  
+  # Random effect (participant and tx_sex) specifically referenced 
+  prior(exponential(1), class = sd, group = "participant"),
+  prior(exponential(1), class = sd, group = "participant:leg"),
+  # Sigma
+  prior(exponential(1), class = sigma)
+  
+)
+
+
+pri3 <- c(
+  
+  # Intercept + global time slope
+  prior(normal(0, 1), class = "Intercept"), 
+  prior(normal(0, 1), class = "b"), 
+  
+  # Correlations of varying effects within groups
+ # prior(lkj(2), class = "cor", group = "tx_sex"),
+  prior(lkj(2), class = "cor", group = "participant"),
+  
+  # Random effect (participant)
+  prior(exponential(1), class = sd), 
+  
+  prior(exponential(1), class = sigma)
+  
+)
+
+
+
+
+mu0.pp <- brm(form0, 
+             prior = pri0, 
+             data = ubf.dat, 
+             file = "fits/02-protein/mu0",
+             file_refit = "on_change",
+             sample_prior = "only")
+
+mu1.pp <- brm(form1, 
+             prior = pri1, 
+             data = ubf.dat, 
+             file = "fits/02-protein/mu1",
+             file_refit = "on_change",
+             sample_prior = "only")
+
+mu2.pp <- brm(form2, 
+             prior = pri2, 
+             data = ubf.dat, 
+             file = "fits/02-protein/mu2",
+             file_refit = "on_change",
+             sample_prior = "only")
+
+mu3.pp <- brm(form3, 
+             prior = pri3, 
+             data = ubf.dat, 
+             file = "fits/02-protein/mu3",
+             file_refit = "on_change",
+             sample_prior = "only")
+
+# Set up predictions/contrasts for model 0
+
+#predictions(mu0.pp, 
+#            newdata = datagrid(tx = unique, 
+#                               time = unique),
+#            )
+
+mu0_pred_contr <- function(m, nd1, nd2) {
+  
+  contr <-  predictions(
+    # The model object
+    m, 
+    # New data specified with the datagrid
+    newdata = datagrid(tx = unique, 
+                       time = unique), 
+    
+    # Number of draws 
+    ndraws = nd1,
+    # Specify contrasts
+    hypothesis = c(
+              "int_old_low_delta" = "b2 - b1 = 0", 
+               "int_old_mod_delta" = "b4 - b3 = 0", 
+               "int_yng_low_delta" = "b6 - b5 = 0", 
+               "int_yng_mod_delta" = "b8 - b7 = 0", 
+               "con_old_con_delta" = "b10 - b9 = 0", 
+              # Average group diffs
+              "yng_vs_old_delta" = "(((b8 - b7) + (b6 - b5)) / 2)  - (((b2 - b1) + (b4 - b3))/2) = 0", 
+              "old_vs_con_delta" = "((b2 - b1) + (b4 - b3))/2  - (b10 - b9) = 0",
+              # Volume effects diffs
+              "yng_mod_vs_low" = "(b8 - b7) - (b6 - b5) = 0",
+              "old_mod_vs_low" = "(b4 - b3) - (b2 - b1) = 0", 
+              # volume effect diffs between age groups
+              "yng_vs_old_vol" = "((b8 - b7) - (b6 - b5)) - ((b4 - b3) - (b2 - b1)) = 0"
+                        ))
+  
+    pred <- predictions(
+      m, 
+      # Number of draws
+      ndraws = nd2,
+      # Predict only over the data grid                  
+            newdata = datagrid(tx = unique, 
+                               time = unique, 
+                               sex = unique), 
+      re_formula = NA)
+    
+    return(
+      list(
+      contr = contr, 
+      pred = pred
+      )
+    )
+
+}
+  
+
+
+
+
+mu1_pred_contr <- function(m, nd1, nd2) {
+  
+  # We need a custom grid to avoid counterfactual tx_sex/allocation 
+  # groupings
+  grid <- ubf.dat |> 
+    distinct(tx_sex, allocation) |> 
+    expand_grid(time = unique(ubf.dat$time))
+  
+  contr <-  predictions(
+    # The model object
+    m, 
+    # New data specified from the above grid
+    newdata = grid, 
+    
+    re_formula = ~ (time | tx_sex),
+    
+    # Number of draws 
+    ndraws = nd1,
+    # Specify contrasts
+    by = c("tx_sex", "time"), 
+    hypothesis = c(
+       "int_old_low_delta" = "((b2-b1)+(b4-b3))/2 = 0", 
+       "int_old_mod_delta" = "((b6-b5)+(b8-b7))/2 = 0", 
+       "int_yng_low_delta" = "((b10-b9)+(b12-b11))/2 = 0", 
+       "int_yng_mod_delta" = "((b14-b13)+(b16-b15))/2  = 0", 
+       "con_old_con_delta" = "((b18-b17)+(b20-b19))/2 = 0", 
+      # Average group diffs
+      "yng_vs_old_delta" = "(((b14-b13)+(b16-b15))/2 + ((b10-b9)+(b12-b11))/2)/2 - (((b6-b5)+(b8-b7))/2 + ((b2-b1)+(b4-b3))/2)/2 = 0 ",
+      "old_vs_con_delta" = "((((b6-b5)+(b8-b7))/2 + ((b2-b1)+(b4-b3))/2) / 2)  - (((b18-b17)+(b20-b19))/2) = 0",
+      # Volume effects diffs
+      "yng_mod_vs_low" = "((b14-b13)+(b16-b15))/2 - ((b10-b9)+(b12-b11))/2 = 0",
+      "old_mod_vs_low" = "((b6-b5)+(b8-b7))/2 - ((b2-b1)+(b4-b3))/2 = 0", 
+      # volume effect diffs between age groups
+      "yng_vs_old_vol" = "(((b14-b13)+(b16-b15))/2 - ((b10-b9)+(b12-b11))/2) - (((b6-b5)+(b8-b7))/2 - ((b2-b1)+(b4-b3))/2) = 0"
+      )
+    )
+  
+    pred <- predictions(
+      m, 
+      # Number of draws
+      ndraws = nd2,
+      # Predict only over the data grid                  
+            newdata = grid, 
+      re_formula = ~ (time | tx_sex))
+    
+    return(
+      list(
+      contr = contr, 
+      pred = pred
+      )
+    )
+
+}
+
+mu2_pred_contr <- function(m, nd1, nd2) {
+  
+  contr <-  predictions(
+    # The model object
+    m, 
+    # New data specified with the datagrid
+    newdata = datagrid(tx_sex = unique, 
+                       time = unique), 
+    re_formula = NA,
+    
+    
+    # Number of draws 
+    ndraws = nd1,
+    # Specify contrasts
+      hypothesis = c(
+              "int_old_low_delta" = "((b2-b1)+(b4-b3))/2 = 0", 
+              "int_old_mod_delta" = "((b6-b5)+(b8-b7))/2 = 0", 
+              "int_yng_low_delta" = "((b10-b9)+(b12-b11))/2 = 0", 
+              "int_yng_mod_delta" = "((b14-b13)+(b16-b15))/2  = 0", 
+              "con_old_con_delta" = "((b18-b17)+(b20-b19))/2 = 0", 
+              "int_old_pooled_delta" = "(((b2-b1)+(b4-b3))/2 + ((b6-b5)+(b8-b7))/2)/2 = 0",
+              "int_yng_pooled_delta" = "(((b10-b9)+(b12-b11))/2 + ((b14-b13)+(b16-b15))/2)/2 = 0",
+              
+               # Average group diffs
+              "yng_vs_old_delta" = "(((b14-b13)+(b16-b15))/2 + ((b10-b9)+(b12-b11))/2)/2 - (((b6-b5)+(b8-b7))/2 + ((b2-b1)+(b4-b3))/2)/2 = 0 ",
+              "old_vs_con_delta" = "((((b6-b5)+(b8-b7))/2 + ((b2-b1)+(b4-b3))/2) / 2)  - (((b18-b17)+(b20-b19))/2) = 0",
+              # Volume effects diffs
+              "yng_mod_vs_low" = "((b14-b13)+(b16-b15))/2 - ((b10-b9)+(b12-b11))/2 = 0",
+              "old_mod_vs_low" = "((b6-b5)+(b8-b7))/2 - ((b2-b1)+(b4-b3))/2 = 0", 
+              # volume effect diffs between age groups
+              "yng_vs_old_vol" = "(((b14-b13)+(b16-b15))/2 - ((b10-b9)+(b12-b11))/2) - (((b6-b5)+(b8-b7))/2 - ((b2-b1)+(b4-b3))/2) = 0"
+              
+            ))
+  
+    pred <- predictions(
+      m, 
+      # Number of draws
+      ndraws = nd2,
+      # Predict only over the data grid                  
+            newdata = datagrid(tx_sex = unique, 
+                               time = unique), 
+        re_formula = NA)
+    
+    return(
+      list(
+      contr = contr, 
+      pred = pred
+      )
+    )
+
+}
+
+mu3_pred_contr <- function(m, nd1, nd2) {
+  
+  # We need a custom grid to avoid counterfactual tx_sex/allocation 
+  # groupings
+  grid <- ubf.dat |> 
+    distinct(tx_sex, allocation) |> 
+    expand_grid(time = unique(ubf.dat$time))
+  
+  contr <-  predictions(
+    # The model object
+    m, 
+    # New data specified from the above grid
+    newdata = grid, 
+    
+    re_formula = ~ (time | tx_sex),
+    
+    # Number of draws 
+    ndraws = nd1,
+    # Specify contrasts
+    by = c("tx_sex", "time"), 
+    hypothesis = c(
+       "int_old_low_delta" = "((b2-b1)+(b4-b3))/2 = 0", 
+       "int_old_mod_delta" = "((b6-b5)+(b8-b7))/2 = 0", 
+       "int_yng_low_delta" = "((b10-b9)+(b12-b11))/2 = 0", 
+       "int_yng_mod_delta" = "((b14-b13)+(b16-b15))/2  = 0", 
+       "con_old_con_delta" = "((b18-b17)+(b20-b19))/2 = 0", 
+      # Average group diffs
+      "yng_vs_old_delta" = "(((b14-b13)+(b16-b15))/2 + ((b10-b9)+(b12-b11))/2)/2 - (((b6-b5)+(b8-b7))/2 + ((b2-b1)+(b4-b3))/2)/2 = 0 ",
+      "old_vs_con_delta" = "((((b6-b5)+(b8-b7))/2 + ((b2-b1)+(b4-b3))/2) / 2)  - (((b18-b17)+(b20-b19))/2) = 0",
+      # Volume effects diffs
+      "yng_mod_vs_low" = "((b14-b13)+(b16-b15))/2 - ((b10-b9)+(b12-b11))/2 = 0",
+      "old_mod_vs_low" = "((b6-b5)+(b8-b7))/2 - ((b2-b1)+(b4-b3))/2 = 0", 
+      # volume effect diffs between age groups
+      "yng_vs_old_vol" = "(((b14-b13)+(b16-b15))/2 - ((b10-b9)+(b12-b11))/2) - (((b6-b5)+(b8-b7))/2 - ((b2-b1)+(b4-b3))/2) = 0"
+      )
+    )
+  
+    pred <- predictions(
+      m, 
+      # Number of draws
+      ndraws = nd2,
+      # Predict only over the data grid                  
+            newdata = grid, 
+      re_formula = ~ (time | tx_sex))
+    
+    return(
+      list(
+      contr = contr, 
+      pred = pred
+      )
+    )
+}
+
+
+
+  
+mu0_preds <- mu0_pred_contr(mu0.pp, nd1 = 1000, nd2 = 50)
+mu1_preds <- mu1_pred_contr(mu1.pp, nd1 = 1000, nd2 = 50)
+mu2_preds <- mu2_pred_contr(mu2.pp, nd1 = 1000, nd2 = 50)
+mu3_preds <- mu3_pred_contr(mu3.pp, nd1 = 1000, nd2 = 50)
+
+
+# Prior predictive simulations
+
+p1 <- bind_rows(
+  posterior_draws(mu0_preds$pred) |> 
+  data.frame() |> 
+    mutate(model = "mu0"), 
+  
+  posterior_draws(mu1_preds$pred) |> 
+  mutate(sex = if_else(grepl("_female", tx_sex), "female", "male"), 
+         tx = gsub("_female", "", tx_sex), 
+         tx = gsub("_male", "", tx), 
+         tx = factor(tx, levels = c("int_old_low","int_old_mod", "int_yng_low","int_yng_mod", "con_old_con"))) |>
+    mutate(model = "mu1"), 
+  
+  posterior_draws(mu2_preds$pred) |> 
+  mutate(sex = if_else(grepl("_female", tx_sex), "female", "male"), 
+         tx = gsub("_female", "", tx_sex), 
+         tx = gsub("_male", "", tx), 
+         tx = factor(tx, levels = c("int_old_low","int_old_mod", "int_yng_low","int_yng_mod", "con_old_con"))) |> 
+    mutate(model = "mu2"), 
+  
+  posterior_draws(mu3_preds$pred) |> 
+  mutate(sex = if_else(grepl("_female", tx_sex), "female", "male"), 
+         tx = gsub("_female", "", tx_sex), 
+         tx = gsub("_male", "", tx), 
+         tx = factor(tx, levels = c("int_old_low","int_old_mod", "int_yng_low","int_yng_mod", "con_old_con"))) |>
+    mutate(model = "mu3")
+    ) |> 
+ 
+  ggplot(aes(time, draw, group = paste(drawid, tx, sex), 
+             color = sex)) + geom_line() + 
+  facet_grid(model ~ tx)
+
+
+
+
+
+
+p2 <- bind_rows(
+  posterior_draws(mu0_preds$contr) |> 
+  mutate(model = "mu0"), 
+    posterior_draws(mu1_preds$contr) |> 
+  mutate(model = "mu1"), 
+           posterior_draws(mu2_preds$contr) |> 
+  mutate(model = "mu2"), 
+   posterior_draws(mu3_preds$contr) |> 
+  mutate(model = "mu3")) |>  
+  
+  ggplot(aes(draw, color = model)) + geom_line(stat = "density") + 
+  facet_wrap(~ hypothesis) +
+  geom_vline(xintercept = 0, lty = 2) + 
+  coord_cartesian(xlim = c(-5, 5))
+
+
+
+```
+
+```{r}
+### Get the posterior distribution
+
+mu0.post <- update(mu0.pp, 
+                  sample_prior = "no", 
+                  iter = 4000,
+                  file = "fits/02-protein/mu0.post",
+                  file_refit = "on_change")
+
+# rhat checks out, 0 above 1.01, highest at 1.003 though
+
+# neff ratio checks out, min ESS at 1347, with zero below 400
+
+
+mu1.post <- update(mu1.pp, 
+                  sample_prior = "no", 
+                  cores = 4,
+                  control = list(adapt_delta = 0.95, 
+                                 max_treedepth = 15),
+                  iter = 4000,
+                  file = "fits/02-protein/mu1.post",
+                  file_refit = "on_change")
+
+# rhat checks out, 0 above 1.01, highest at 1.003
+
+# checks out barely, min ESS at 1083, with zero below 400
+
+
+mu2.post <- update(mu2.pp, 
+                  sample_prior = "no", 
+                  cores = 4,
+                   control = list(adapt_delta = 0.99, 
+                                 max_treedepth = 15),
+                  iter = 10000,
+                  file = "fits/02-protein/mu2.post",
+                  file_refit = "on_change")
+
+# Warning messages:
+# 1: There were 6 divergent transitions after warmup. See
+# https://mc-stan.org/misc/warnings.html#divergent-transitions-after-warmup
+# to find out why this is a problem and how to eliminate them. 
+# 2: Examine the pairs() plot to diagnose sampling problems
+
+# Final settings: adapt_delta = 0.99, iter = 10000
+# rhat checks out, 0 above 1.01, highest at 1.006
+# checks out barely, min ESS at 597, with zero below 400
+
+
+
+mu3.post <- update(mu3.pp, 
+                  sample_prior = "no", 
+                  cores = 4,
+                   control = list(adapt_delta = 0.99, 
+                                 max_treedepth = 15),
+                  iter = 10000,
+                  file = "fits/02-protein/mu3.post",
+                  file_refit = "on_change")
+
+# Bumping up to 10k, changing adapt_delta to 0.99 due to low ESS and increased divergences
+
+# Warning messages:
+# 1: There were 3 divergent transitions after warmup. See
+# https://mc-stan.org/misc/warnings.html#divergent-transitions-after-warmup
+# to find out why this is a problem and how to eliminate them. 
+# 2: There were 1 chains where the estimated Bayesian Fraction of Missing Information was low. See
+# https://mc-stan.org/misc/warnings.html#bfmi-low 
+# 3: Examine the pairs() plot to diagnose sampling problems
+
+#rhat(mu3.post) 
+#rhat_vals <- brms::rhat(mu3.post)
+#max(rhat_vals)
+#rhat_vals[rhat_vals > 1.01] 
+# rhat checks out, 0 above 1.01, highest at 1.004
+
+#neff_ratio(mu3.post)
+
+#total_draws <- brms::ndraws(mu3.post)
+#total_draws
+
+#neff_vals <- brms::neff_ratio(mu3.post)
+#ess_vals <- neff_vals * total_draws
+
+#min(ess_vals)                  
+#ess_vals[ess_vals < 400]       
+# checks out barely, min ESS at 583, with zero below 400
+
+## Posterior predictive checks
+
+
+
+pp_check(mu3.post, type = "dens_overlay_grouped", 
+         group = "tx_sex")
+
+pp_check(mu2.post)
+
+# These looks like the models might need some work/more data
+
+
+
+
+```
+
+```{r}
+# Group comparisons
+
+mu0_preds <- mu0_pred_contr(mu0.post, nd1 = 4000, nd2 = 50)
+mu1_preds <- mu1_pred_contr(mu1.post, nd1 = 4000, nd2 = 50)
+mu2_preds <- mu2_pred_contr(mu2.post, nd1 = 4000, nd2 = 50)
+mu3_preds <- mu3_pred_contr(mu3.post, nd1 = 4000, nd2 = 50)
+
+
+p1 <- bind_rows(
+  posterior_draws(mu0_preds$pred) |> 
+  data.frame() |> 
+    mutate(model = "mu0"), 
+  
+  posterior_draws(mu1_preds$pred) |> 
+  mutate(sex = if_else(grepl("_female", tx_sex), "female", "male"), 
+         tx = gsub("_female", "", tx_sex), 
+         tx = gsub("_male", "", tx), 
+         tx = factor(tx, levels = c("int_old_low","int_old_mod", "int_yng_low","int_yng_mod", "con_old_con"))) |>
+    mutate(model = "mu1"), 
+  
+  posterior_draws(mu2_preds$pred) |> 
+  mutate(sex = if_else(grepl("_female", tx_sex), "female", "male"), 
+         tx = gsub("_female", "", tx_sex), 
+         tx = gsub("_male", "", tx), 
+         tx = factor(tx, levels = c("int_old_low","int_old_mod", "int_yng_low","int_yng_mod", "con_old_con"))) |> 
+    mutate(model = "mu2"), 
+  
+  posterior_draws(mu3_preds$pred) |> 
+  mutate(sex = if_else(grepl("_female", tx_sex), "female", "male"), 
+         tx = gsub("_female", "", tx_sex), 
+         tx = gsub("_male", "", tx), 
+         tx = factor(tx, levels = c("int_old_low","int_old_mod", "int_yng_low","int_yng_mod", "con_old_con"))) |> 
+    mutate(model = "mu3")
+  ) |> 
+ 
+  ggplot(aes(time, draw, group = paste(drawid, tx, sex), 
+             color = sex)) + geom_line() + 
+  facet_grid(model ~ tx)
+
+
+
+
+
+p2 <- bind_rows(
+  posterior_draws(mu0_preds$contr) |> 
+  mutate(model = "mu0"), 
+    posterior_draws(mu1_preds$contr) |> 
+  mutate(model = "mu1"), 
+           posterior_draws(mu2_preds$contr) |> 
+  mutate(model = "mu2"), 
+  posterior_draws(mu3_preds$contr) |> 
+  mutate(model = "mu3")) |>  
+  
+  ggplot(aes(draw, color = model)) + geom_line(stat = "density") + 
+  facet_wrap(~ hypothesis) +
+  geom_vline(xintercept = 0, lty = 2)
+
+
+
+############### Predictions for plotting #####################
+
+
+
+p1 <- posterior_draws(mu2_preds$pred) |> 
+    mutate(sex = if_else(grepl("_female", tx_sex), "female", "male"), 
+         tx = gsub("_female", "", tx_sex), 
+         tx = gsub("_male", "", tx), 
+         tx = factor(tx, levels = c("int_old_low","int_old_mod", "int_yng_low","int_yng_mod", "con_old_con"))) |> 
+  
+  #mutate(draw = draw * sd_corr + mean_corr, 
+         #draw = exp(draw)) |> 
+  
+  
+  summarise(.by = c(tx, sex, time), 
+            m = mean(draw), 
+            lwr50 = quantile(draw, 0.25), 
+            upr50 = quantile(draw, 0.75),  
+            lwr90 = quantile(draw, 0.05), 
+            upr90 = quantile(draw, 0.95),
+            lwr95 = quantile(draw, 0.025), 
+            upr95 = quantile(draw, 0.975)) |> 
+  
+  
+  ggplot(aes(time, m, color = sex, group = paste(tx, sex))) + 
+  
+
+  
+  geom_segment(aes(y = c(lwr50), yend = c(upr50), 
+                   x = time, xend = time), 
+               
+              linewidth = 2) +
+    geom_segment(aes(y = c(lwr90), yend = c(upr90), 
+                   x = time, xend = time), 
+             
+              linewidth = 1.5) +
+    geom_segment(aes(y = c(lwr95), yend = c(upr95), 
+                   x = time, xend = time), 
+          
+              linewidth = 1) +
+
+  geom_line() + 
+  
+    geom_point(size = 3, shape = 21, 
+             aes(color = NULL, fill = sex)) +
+  
+  facet_wrap(~ tx, ncol = 5)
+
+
+
+p2 <- posterior_draws(mu3_preds$contr) |> 
+ 
+  
+  #mutate(draw = draw * sd_corr , 
+  #       draw = exp(draw)) |> 
+  
+  ggplot(aes(draw)) + geom_line(stat = "density") + 
+  facet_wrap(~ hypothesis) +
+  geom_vline(xintercept = 1, lty = 2) 
+
+
+
+
+
+## Posterior probability
+# The code below produces a table with hypothesis and posterior probability of direction, the proportion of posterior draws where the effect exceeds 1. A pos value of thus 1 means 100% of posterior draws showed the ratio exceeding 1 for that contrast, very strong evidence of a positive effect. Values at 0.5 on the other hand, are essentially a coin flip, no credible directional effect. Useful as a supplementary statistic, perhaps?
+
+
+## Here I added mean, lower and upper to the summarise to get the mean ratio, as well as 95% ETI in addition to pos. 
+ 
+posterior_draws(mu2_preds$contr) |>
+  mutate(draw = draw * sd_ubf,
+         draw = exp(draw)) |>
+  summarise(.by = hypothesis,
+            mean = mean(draw),
+            lower95 = quantile(draw, 0.025),
+            upper95 = quantile(draw, 0.975),
+            pos = sum(draw > 1) / n())
+
+
+# Since these are ratios (from the exp() transform), the null value is 1, not 0 - i.e., its about whether the 95% ETI excludes 1, not zero. These mean/CI tables should be reported and intepreted as ratios (fold-changes), e.g. "mean ratio = 1.15, 95% ETI [1.08, 1.23] - interpretable as "a 15% increase", not as an absolute cm3 diff. 
+
+
+
+# For figure plotting
+
+
+pred_ubf <- posterior_draws(mu2_preds$pred) |>
+  mutate(
+    sex = if_else(grepl("_female", tx_sex), "female", "male"),
+    tx = gsub("_female", "", tx_sex),
+    tx = gsub("_male", "", tx),
+    tx = factor(tx, levels = c("int_old_low", "int_old_mod", "int_yng_low", "int_yng_mod", "con_old_con"))
+  ) |>
+  mutate(draw = draw * sd_ubf + mean_ubf,
+         draw = exp(draw)) |>
+  summarise(.by = c(tx, sex, time),
+            m = mean(draw),
+            lwr50 = quantile(draw, 0.25),
+            upr50 = quantile(draw, 0.75),
+            lwr90 = quantile(draw, 0.05),
+            upr90 = quantile(draw, 0.95),
+            lwr95 = quantile(draw, 0.025),
+            upr95 = quantile(draw, 0.975))
+
+saveRDS(pred_ubf, "data/data-gen/pred_ubf.rds")
+
+
+contrast_ubf <- posterior_draws(mu2_preds$contr) |>
+  mutate(draw = draw * sd_ubf, draw = exp(draw)) |>
+  summarise(.by = hypothesis,
+            mean = mean(draw),
+            lower95 = quantile(draw, 0.025),
+            upper95 = quantile(draw, 0.975),
+            pos = sum(draw > 1) / n()) |>
+  mutate(pct_change = (mean - 1) * 100,
+         pct_lower  = (lower95 - 1) * 100,
+         pct_upper  = (upper95 - 1) * 100,
+         credible   = ifelse(lower95 > 1 | upper95 < 1, "Yes", "No"))
+
+saveRDS(contrast_ubf, "data/data-gen/contrast_ubf.rds")
+
+
+
+
+```
+
+
+#### Results UBF
+
+Older adults in the intervention group (averaged across volume conditions) tended to increase UBF protein content by week 3 (19.1%, 95% CI [−7.0%, 49.0%], P(>0) = 90.1%), as did the control group (24.9%, 95% CI [−15.7%, 64.3%], P(>0) = 90.8%), with no evidence of a difference between them (−2.6%, 95% CI [−33.7%, 38.1%], P(<0) = 58.6%). There was weak evidence of an increase in young adults (averaged across volume conditions; 15.7%, 95% CI [−8.0%, 44.2%], P(>0) = 88.5%), with no evidence of a difference from older adults (−1.5%, 95% CI [−29.0%, 33.8%], P(<0) = 56.8%). Within young adults, there was weak evidence of an increase with both low-volume (15.2%, 95% CI [−18.7%, 52.5%], P(>0) = 80.8%) and moderate-volume training (17.6%, 95% CI [−15.2%, 60.7%], P(>0) = 83.2%), with no evidence of a difference between them (4.4%, 95% CI [−34.0%, 54.8%], P(>0) = 53.9%). In older adults, there was weak evidence of an increase with low-volume training (27.1%, 95% CI [−13.3%, 74.7%], P(>0) = 88.9%) and no evidence with moderate-volume training (13.1%, 95% CI [−18.8%, 55.0%], P(>0) = 74.9%), again with no evidence of a difference between them (−8.2%, 95% CI [−44.1%, 41.9%], P(<0) = 67.8%). There was no evidence that the volume effect differed between age groups (20.1%, 95% CI [−39.8%, 112.3%], P(>0) = 67.2%).
+
+
+
+### c-Myc
+
+#### Data
+
+In the code chunk below we plot the data grouped by participant leg.
+
+```{r}
+
+# Data
+
+west.dat <- reliefdata::relief_western |> 
+  mutate(participant = as.character(participant)) |> 
+  select(participant, leg, sampleid = sample, time, capillary, peak,
+         protein, position, mw_kda, height, area, area_p, corr.area,
+         width, plate) |> 
+  filter(!sampleid %in% c("Biot. Ladder", "DDH2O"),
+         !participant %in% c("3084", "3090")) |>  #no measurement
+  print()
+
+condition <- reliefdata::relief_volume |> 
+  mutate(participant = as.character(participant))
+
+participants <- reliefdata::relief_participants |> 
+  mutate(age_group = if_else(age < 40, "yng", "old")) |> 
+  select(participant, age, sex, allocation, age_group)
+
+# Both cMyc peaks are noted in the runs: cMyc_low = ~49 kDa, cMyc_high = ~60 kDa.
+# Decision: both peaks should be analysedm but as separate outcomes (not combined/summed),
+# since they likely represent distinct isoforms/phosphorylation states rather than
+# duplicate measurements of the same signal.
+
+# Shared cleaning/join logic as a function, applied separately per peak below
+build_myc_dat <- function(protein_filter) {
+  west.dat |> 
+    full_join(condition) |> 
+    select(-arm) |> 
+    full_join(participants) |> 
+    filter(!is.na(sampleid), #filters out NA's introduced by joining, since not both legs are represented at pre
+           protein == protein_filter) |> 
+    mutate(corr.area = as.numeric(corr.area)) |> 
+    mutate(y = log(corr.area),
+           ystd = (y - mean(y, na.rm = TRUE)) / sd(y, na.rm = TRUE),
+           condition = if_else(allocation == "con", "con", condition),
+           tx = paste0(allocation, "_", age_group, "_", condition),
+           tx = factor(tx, levels = c("int_old_low","int_old_mod", "int_yng_low","int_yng_mod", "con_old_con")),
+           tx_sex = paste0(tx, "_", sex),
+           tx_sex = factor(tx_sex, levels = c(
+             "int_old_low_female", "int_old_low_male",
+             "int_old_mod_female", "int_old_mod_male", 
+             "int_yng_low_female", "int_yng_low_male",
+             "int_yng_mod_female", "int_yng_mod_male", 
+             "con_old_con_female", "con_old_con_male"
+           )),
+           time = factor(time, levels = c("pre", "w3")),
+           sex_centered = if_else(sex == "female", -0.5, 0.5)) |> 
+    print()
+}
+
+myc_high.dat <- build_myc_dat("cMyc_high")
+myc_low.dat  <- build_myc_dat("cMyc_low")
+
+## Save sd and mean for back transform, separately per peak
+mean_cmyc_high <- mean(myc_high.dat$y, na.rm = TRUE)
+sd_cmyc_high   <- sd(myc_high.dat$y, na.rm = TRUE)
+
+mean_cmyc_low <- mean(myc_low.dat$y, na.rm = TRUE)
+sd_cmyc_low   <- sd(myc_low.dat$y, na.rm = TRUE)
+
+
+# A preliminary figure of observed data, per peak
+
+myc_high.dat |> 
+  mutate(time = factor(time, labels = c("Pre", "Week 3")), 
+         age_group = factor(age_group, labels = c("Old", "Young")), 
+         allocation = factor(allocation, labels = c("Control", "Intervention")), 
+         sex = factor(sex, labels = c("Female", "Male"))) |> 
+  ggplot(aes(time, corr.area, color = sex, group = paste(participant, leg))) + 
+  geom_line() + 
+  facet_wrap(~ paste(age_group, allocation)) + 
+  labs(x = "", y = "Corrected Area c-Myc (high, ~60 kDa)") + 
+  theme(axis.title.y = ggtext::element_markdown())
+
+myc_low.dat |> 
+  mutate(time = factor(time, labels = c("Pre", "Week 3")), 
+         age_group = factor(age_group, labels = c("Old", "Young")), 
+         allocation = factor(allocation, labels = c("Control", "Intervention")), 
+         sex = factor(sex, labels = c("Female", "Male"))) |> 
+  ggplot(aes(time, corr.area, color = sex, group = paste(participant, leg))) + 
+  geom_line() + 
+  facet_wrap(~ paste(age_group, allocation)) + 
+  labs(x = "", y = "Corrected Area c-Myc (low, ~49 kDa)") + 
+  theme(axis.title.y = ggtext::element_markdown())
+
+
+
+```
+
+### c-Myc High Peak
+
+#### Models
+
+```{r}
+form0 <- bf(ystd ~   0 + tx + tx:time + sex + (1|participant))
+form1 <- bf(ystd ~  time + allocation + allocation:time +  (1|participant) +  (1|participant:leg) + (time | tx_sex))
+form2 <- bf(ystd ~   0 + tx_sex + tx_sex:time  + (1 + time|participant) +  (1|participant:leg))
+form3 <- bf(ystd ~   time + allocation + allocation:time +  (1 + time|participant) +  (1|participant:leg) + (time | tx_sex))
+
+
+# Priors cmyc high
+get_prior(form0, data = myc_high.dat)
+get_prior(form1, data = myc_high.dat)
+get_prior(form2, data = myc_high.dat)
+get_prior(form3, data = myc_high.dat)
+
+pri0 <- c(
+  # Sex diffs
+  prior(normal(0, 1), class = "b", coef = "sexmale"), 
+  # Group-level intercepts - all parameters specifically referenced
+  prior(normal(0, 1), class = "b", coef = "txcon_old_con"), 
+  prior(normal(0, 1), class = "b", coef = "txint_old_low"), 
+  prior(normal(0, 1), class = "b", coef = "txint_old_mod"), 
+  prior(normal(0, 1), class = "b", coef = "txint_yng_low"), 
+  prior(normal(0, 1), class = "b", coef = "txint_yng_mod"),
+  
+  # time-Post effects
+  prior(normal(0, 1), class = "b", coef = "txcon_old_con:timew3"), 
+  prior(normal(0, 1), class = "b", coef = "txint_old_low:timew3"), 
+  prior(normal(0, 1), class = "b", coef = "txint_old_mod:timew3"), 
+  prior(normal(0, 1), class = "b", coef = "txint_yng_low:timew3"), 
+  prior(normal(0, 1), class = "b", coef = "txint_yng_mod:timew3"),
+  
+  # Random effect (participant)
+  prior(exponential(1), class = sd), 
+  
+  prior(exponential(1), class = sigma)
+)
+
+
+pri1 <- c(
+  
+  # Intercept + global time slope
+  prior(normal(0, 1), class = "Intercept"), 
+  prior(normal(0, 1), class = "b"), 
+  
+  # Correlations of varying effects within groups
+  #prior(lkj(2), class = "cor", group = "tx_sex"),
+  
+  # Random effect (participant)
+  prior(exponential(1), class = sd), 
+  
+  prior(exponential(1), class = sigma)
+  
+)
+
+
+pri2 <- c(
+  
+  # All fixed effects
+  prior(normal(0, 1), class = "b"), 
+
+  prior(lkj(2), class = "cor", group = "participant"),
+  
+  # Random effect (participant and tx_sex) specifically referenced 
+  prior(exponential(1), class = sd, group = "participant"),
+  prior(exponential(1), class = sd, group = "participant:leg"),
+  # Sigma
+  prior(exponential(1), class = sigma)
+  
+)
+
+
+pri3 <- c(
+  
+  # Intercept + global time slope
+  prior(normal(0, 1), class = "Intercept"), 
+  prior(normal(0, 1), class = "b"), 
+  
+  # Correlations of varying effects within groups
+ # prior(lkj(2), class = "cor", group = "tx_sex"),
+  prior(lkj(2), class = "cor", group = "participant"),
+  
+  # Random effect (participant)
+  prior(exponential(1), class = sd), 
+  
+  prior(exponential(1), class = sigma)
+  
+)
+
+
+
+
+mhi0.pp <- brm(form0, 
+             prior = pri0, 
+             data = myc_high.dat, 
+             file = "fits/02-protein/mhi0",
+             file_refit = "on_change",
+             sample_prior = "only")
+
+mhi1.pp <- brm(form1, 
+             prior = pri1, 
+             data = myc_high.dat, 
+             file = "fits/02-protein/mhi1",
+             file_refit = "on_change",
+             sample_prior = "only")
+
+mhi2.pp <- brm(form2, 
+             prior = pri2, 
+             data = myc_high.dat, 
+             file = "fits/02-protein/mhi2",
+             file_refit = "on_change",
+             sample_prior = "only")
+
+mhi3.pp <- brm(form3, 
+             prior = pri3, 
+             data = myc_high.dat, 
+             file = "fits/02-protein/mhi3",
+             file_refit = "on_change",
+             sample_prior = "only")
+
+# Set up predictions/contrasts for model 0
+
+#predictions(mu0.pp, 
+#            newdata = datagrid(tx = unique, 
+#                               time = unique),
+#            )
+
+mhi0_pred_contr <- function(m, nd1, nd2) {
+  
+  contr <-  predictions(
+    # The model object
+    m, 
+    # New data specified with the datagrid
+    newdata = datagrid(tx = unique, 
+                       time = unique), 
+    
+    # Number of draws 
+    ndraws = nd1,
+    # Specify contrasts
+    hypothesis = c(
+              "int_old_low_delta" = "b2 - b1 = 0", 
+               "int_old_mod_delta" = "b4 - b3 = 0", 
+               "int_yng_low_delta" = "b6 - b5 = 0", 
+               "int_yng_mod_delta" = "b8 - b7 = 0", 
+               "con_old_con_delta" = "b10 - b9 = 0", 
+              # Average group diffs
+              "yng_vs_old_delta" = "(((b8 - b7) + (b6 - b5)) / 2)  - (((b2 - b1) + (b4 - b3))/2) = 0", 
+              "old_vs_con_delta" = "((b2 - b1) + (b4 - b3))/2  - (b10 - b9) = 0",
+              # Volume effects diffs
+              "yng_mod_vs_low" = "(b8 - b7) - (b6 - b5) = 0",
+              "old_mod_vs_low" = "(b4 - b3) - (b2 - b1) = 0", 
+              # volume effect diffs between age groups
+              "yng_vs_old_vol" = "((b8 - b7) - (b6 - b5)) - ((b4 - b3) - (b2 - b1)) = 0"
+                        ))
+  
+    pred <- predictions(
+      m, 
+      # Number of draws
+      ndraws = nd2,
+      # Predict only over the data grid                  
+            newdata = datagrid(tx = unique, 
+                               time = unique, 
+                               sex = unique), 
+      re_formula = NA)
+    
+    return(
+      list(
+      contr = contr, 
+      pred = pred
+      )
+    )
+
+}
+  
+
+
+
+
+mhi1_pred_contr <- function(m, nd1, nd2) {
+  
+  # We need a custom grid to avoid counterfactual tx_sex/allocation 
+  # groupings
+  grid <- myc_high.dat |> 
+    distinct(tx_sex, allocation) |> 
+    expand_grid(time = unique(myc_high.dat$time))
+  
+  contr <-  predictions(
+    # The model object
+    m, 
+    # New data specified from the above grid
+    newdata = grid, 
+    
+    re_formula = ~ (time | tx_sex),
+    
+    # Number of draws 
+    ndraws = nd1,
+    # Specify contrasts
+    by = c("tx_sex", "time"), 
+    hypothesis = c(
+       "int_old_low_delta" = "((b2-b1)+(b4-b3))/2 = 0", 
+       "int_old_mod_delta" = "((b6-b5)+(b8-b7))/2 = 0", 
+       "int_yng_low_delta" = "((b10-b9)+(b12-b11))/2 = 0", 
+       "int_yng_mod_delta" = "((b14-b13)+(b16-b15))/2  = 0", 
+       "con_old_con_delta" = "((b18-b17)+(b20-b19))/2 = 0", 
+      # Average group diffs
+      "yng_vs_old_delta" = "(((b14-b13)+(b16-b15))/2 + ((b10-b9)+(b12-b11))/2)/2 - (((b6-b5)+(b8-b7))/2 + ((b2-b1)+(b4-b3))/2)/2 = 0 ",
+      "old_vs_con_delta" = "((((b6-b5)+(b8-b7))/2 + ((b2-b1)+(b4-b3))/2) / 2)  - (((b18-b17)+(b20-b19))/2) = 0",
+      # Volume effects diffs
+      "yng_mod_vs_low" = "((b14-b13)+(b16-b15))/2 - ((b10-b9)+(b12-b11))/2 = 0",
+      "old_mod_vs_low" = "((b6-b5)+(b8-b7))/2 - ((b2-b1)+(b4-b3))/2 = 0", 
+      # volume effect diffs between age groups
+      "yng_vs_old_vol" = "(((b14-b13)+(b16-b15))/2 - ((b10-b9)+(b12-b11))/2) - (((b6-b5)+(b8-b7))/2 - ((b2-b1)+(b4-b3))/2) = 0"
+      )
+    )
+  
+    pred <- predictions(
+      m, 
+      # Number of draws
+      ndraws = nd2,
+      # Predict only over the data grid                  
+            newdata = grid, 
+      re_formula = ~ (time | tx_sex))
+    
+    return(
+      list(
+      contr = contr, 
+      pred = pred
+      )
+    )
+
+}
+
+mhi2_pred_contr <- function(m, nd1, nd2) {
+  
+  contr <-  predictions(
+    # The model object
+    m, 
+    # New data specified with the datagrid
+    newdata = datagrid(tx_sex = unique, 
+                       time = unique), 
+    re_formula = NA,
+    
+    
+    # Number of draws 
+    ndraws = nd1,
+    # Specify contrasts
+      hypothesis = c(
+              "int_old_low_delta" = "((b2-b1)+(b4-b3))/2 = 0", 
+              "int_old_mod_delta" = "((b6-b5)+(b8-b7))/2 = 0", 
+              "int_yng_low_delta" = "((b10-b9)+(b12-b11))/2 = 0", 
+              "int_yng_mod_delta" = "((b14-b13)+(b16-b15))/2  = 0", 
+              "con_old_con_delta" = "((b18-b17)+(b20-b19))/2 = 0", 
+              "int_old_pooled_delta" = "(((b2-b1)+(b4-b3))/2 + ((b6-b5)+(b8-b7))/2)/2 = 0",
+              "int_yng_pooled_delta" = "(((b10-b9)+(b12-b11))/2 + ((b14-b13)+(b16-b15))/2)/2 = 0",
+              
+               # Average group diffs
+              "yng_vs_old_delta" = "(((b14-b13)+(b16-b15))/2 + ((b10-b9)+(b12-b11))/2)/2 - (((b6-b5)+(b8-b7))/2 + ((b2-b1)+(b4-b3))/2)/2 = 0 ",
+              "old_vs_con_delta" = "((((b6-b5)+(b8-b7))/2 + ((b2-b1)+(b4-b3))/2) / 2)  - (((b18-b17)+(b20-b19))/2) = 0",
+              # Volume effects diffs
+              "yng_mod_vs_low" = "((b14-b13)+(b16-b15))/2 - ((b10-b9)+(b12-b11))/2 = 0",
+              "old_mod_vs_low" = "((b6-b5)+(b8-b7))/2 - ((b2-b1)+(b4-b3))/2 = 0", 
+              # volume effect diffs between age groups
+              "yng_vs_old_vol" = "(((b14-b13)+(b16-b15))/2 - ((b10-b9)+(b12-b11))/2) - (((b6-b5)+(b8-b7))/2 - ((b2-b1)+(b4-b3))/2) = 0"
+              
+            ))
+  
+    pred <- predictions(
+      m, 
+      # Number of draws
+      ndraws = nd2,
+      # Predict only over the data grid                  
+            newdata = datagrid(tx_sex = unique, 
+                               time = unique), 
+        re_formula = NA)
+    
+    return(
+      list(
+      contr = contr, 
+      pred = pred
+      )
+    )
+
+}
+
+mhi3_pred_contr <- function(m, nd1, nd2) {
+  
+  # We need a custom grid to avoid counterfactual tx_sex/allocation 
+  # groupings
+  grid <- myc_high.dat |> 
+    distinct(tx_sex, allocation) |> 
+    expand_grid(time = unique(myc_high.dat$time))
+  
+  contr <-  predictions(
+    # The model object
+    m, 
+    # New data specified from the above grid
+    newdata = grid, 
+    
+    re_formula = ~ (time | tx_sex),
+    
+    # Number of draws 
+    ndraws = nd1,
+    # Specify contrasts
+    by = c("tx_sex", "time"), 
+    hypothesis = c(
+       "int_old_low_delta" = "((b2-b1)+(b4-b3))/2 = 0", 
+       "int_old_mod_delta" = "((b6-b5)+(b8-b7))/2 = 0", 
+       "int_yng_low_delta" = "((b10-b9)+(b12-b11))/2 = 0", 
+       "int_yng_mod_delta" = "((b14-b13)+(b16-b15))/2  = 0", 
+       "con_old_con_delta" = "((b18-b17)+(b20-b19))/2 = 0", 
+      # Average group diffs
+      "yng_vs_old_delta" = "(((b14-b13)+(b16-b15))/2 + ((b10-b9)+(b12-b11))/2)/2 - (((b6-b5)+(b8-b7))/2 + ((b2-b1)+(b4-b3))/2)/2 = 0 ",
+      "old_vs_con_delta" = "((((b6-b5)+(b8-b7))/2 + ((b2-b1)+(b4-b3))/2) / 2)  - (((b18-b17)+(b20-b19))/2) = 0",
+      # Volume effects diffs
+      "yng_mod_vs_low" = "((b14-b13)+(b16-b15))/2 - ((b10-b9)+(b12-b11))/2 = 0",
+      "old_mod_vs_low" = "((b6-b5)+(b8-b7))/2 - ((b2-b1)+(b4-b3))/2 = 0", 
+      # volume effect diffs between age groups
+      "yng_vs_old_vol" = "(((b14-b13)+(b16-b15))/2 - ((b10-b9)+(b12-b11))/2) - (((b6-b5)+(b8-b7))/2 - ((b2-b1)+(b4-b3))/2) = 0"
+      )
+    )
+  
+    pred <- predictions(
+      m, 
+      # Number of draws
+      ndraws = nd2,
+      # Predict only over the data grid                  
+            newdata = grid, 
+      re_formula = ~ (time | tx_sex))
+    
+    return(
+      list(
+      contr = contr, 
+      pred = pred
+      )
+    )
+}
+
+
+
+  
+mhi0_preds <- mhi0_pred_contr(mhi0.pp, nd1 = 1000, nd2 = 50)
+mhi1_preds <- mhi1_pred_contr(mhi1.pp, nd1 = 1000, nd2 = 50)
+mhi2_preds <- mhi2_pred_contr(mhi2.pp, nd1 = 1000, nd2 = 50)
+mhi3_preds <- mhi3_pred_contr(mhi3.pp, nd1 = 1000, nd2 = 50)
+
+
+# Prior predictive simulations
+
+p1 <- bind_rows(
+  posterior_draws(mhi0_preds$pred) |> 
+  data.frame() |> 
+    mutate(model = "mhi0"), 
+  
+  posterior_draws(mhi1_preds$pred) |> 
+  mutate(sex = if_else(grepl("_female", tx_sex), "female", "male"), 
+         tx = gsub("_female", "", tx_sex), 
+         tx = gsub("_male", "", tx), 
+         tx = factor(tx, levels = c("int_old_low","int_old_mod", "int_yng_low","int_yng_mod", "con_old_con"))) |>
+    mutate(model = "mhi1"), 
+  
+  posterior_draws(mhi2_preds$pred) |> 
+  mutate(sex = if_else(grepl("_female", tx_sex), "female", "male"), 
+         tx = gsub("_female", "", tx_sex), 
+         tx = gsub("_male", "", tx), 
+         tx = factor(tx, levels = c("int_old_low","int_old_mod", "int_yng_low","int_yng_mod", "con_old_con"))) |> 
+    mutate(model = "mhi2"), 
+  
+  posterior_draws(mhi3_preds$pred) |> 
+  mutate(sex = if_else(grepl("_female", tx_sex), "female", "male"), 
+         tx = gsub("_female", "", tx_sex), 
+         tx = gsub("_male", "", tx), 
+         tx = factor(tx, levels = c("int_old_low","int_old_mod", "int_yng_low","int_yng_mod", "con_old_con"))) |>
+    mutate(model = "mhi3")
+    ) |> 
+ 
+  ggplot(aes(time, draw, group = paste(drawid, tx, sex), 
+             color = sex)) + geom_line() + 
+  facet_grid(model ~ tx)
+
+
+
+
+
+
+p2 <- bind_rows(
+  posterior_draws(mhi0_preds$contr) |> 
+  mutate(model = "mhi0"), 
+    posterior_draws(mhi1_preds$contr) |> 
+  mutate(model = "mhi1"), 
+           posterior_draws(mhi2_preds$contr) |> 
+  mutate(model = "mhi2"), 
+   posterior_draws(mhi3_preds$contr) |> 
+  mutate(model = "mhi3")) |>  
+  
+  ggplot(aes(draw, color = model)) + geom_line(stat = "density") + 
+  facet_wrap(~ hypothesis) +
+  geom_vline(xintercept = 0, lty = 2) + 
+  coord_cartesian(xlim = c(-5, 5))
+
+
+
+```
+
+```{r}
+### Get the posterior distribution
+
+mhi0.post <- update(mhi0.pp, 
+                  sample_prior = "no", 
+                  iter = 4000,
+                  file = "fits/02-protein/mhi0.post",
+                  file_refit = "on_change")
+
+
+
+mhi1.post <- update(mhi1.pp, 
+                  sample_prior = "no", 
+                  cores = 4,
+                  control = list(adapt_delta = 0.95, 
+                                 max_treedepth = 15),
+                  iter = 4000,
+                  file = "fits/02-protein/mhi1.post",
+                  file_refit = "on_change")
+
+
+
+mhi2.post <- update(mhi2.pp, 
+                  sample_prior = "no", 
+                  cores = 4,
+                   control = list(adapt_delta = 0.99, 
+                                 max_treedepth = 15),
+                  iter = 10000,
+                  file = "fits/02-protein/mhi2.post",
+                  file_refit = "on_change")
+
+# Starting this at 10k iterations and adapt_delta 0.99, since it was required for the UBF data
+
+# rhat checks out, 0 above 1.01, highest at 1.001
+# ESS cheks out, min ESS at 3305, with zero below 400
+
+
+
+mhi3.post <- update(mhi3.pp, 
+                  sample_prior = "no", 
+                  cores = 4,
+                   control = list(adapt_delta = 0.99, 
+                                 max_treedepth = 15),
+                  iter = 10000,
+                  file = "fits/02-protein/mhi3.post",
+                  file_refit = "on_change")
+
+# Starting this at 10k iterations and adapt_delta 0.99, since it was required for the UBF data
+# rhat checks out, 0 above 1.01, highest at 1.001
+# ESS checks out, min ESS at 3633, with zero below 400
+
+#rhat(mhi3.post) 
+#rhat_vals <- brms::rhat(mhi3.post)
+#max(rhat_vals)
+#rhat_vals[rhat_vals > 1.01] 
+
+#neff_ratio(mhi3.post)
+
+#total_draws <- brms::ndraws(mhi3.post)
+#total_draws
+
+#neff_vals <- brms::neff_ratio(mhi3.post)
+#ess_vals <- neff_vals * total_draws
+
+#min(ess_vals)                  
+#ess_vals[ess_vals < 400]       
+
+
+
+## Posterior predictive checks
+
+pp_check(mhi3.post, type = "dens_overlay_grouped", 
+         group = "tx_sex")
+
+pp_check(mhi2.post)
+
+# These looks like the models might need some work
+
+
+
+
+```
+
+```{r}
+# Group comparisons
+
+mhi0_preds <- mhi0_pred_contr(mhi0.post, nd1 = 4000, nd2 = 50)
+mhi1_preds <- mhi1_pred_contr(mhi1.post, nd1 = 4000, nd2 = 50)
+mhi2_preds <- mhi2_pred_contr(mhi2.post, nd1 = 4000, nd2 = 50)
+mhi3_preds <- mhi3_pred_contr(mhi3.post, nd1 = 4000, nd2 = 50)
+
+
+p1 <- bind_rows(
+  posterior_draws(mhi0_preds$pred) |> 
+  data.frame() |> 
+    mutate(model = "mhi0"), 
+  
+  posterior_draws(mhi1_preds$pred) |> 
+  mutate(sex = if_else(grepl("_female", tx_sex), "female", "male"), 
+         tx = gsub("_female", "", tx_sex), 
+         tx = gsub("_male", "", tx), 
+         tx = factor(tx, levels = c("int_old_low","int_old_mod", "int_yng_low","int_yng_mod", "con_old_con"))) |>
+    mutate(model = "mhi1"), 
+  
+  posterior_draws(mhi2_preds$pred) |> 
+  mutate(sex = if_else(grepl("_female", tx_sex), "female", "male"), 
+         tx = gsub("_female", "", tx_sex), 
+         tx = gsub("_male", "", tx), 
+         tx = factor(tx, levels = c("int_old_low","int_old_mod", "int_yng_low","int_yng_mod", "con_old_con"))) |> 
+    mutate(model = "mhi2"), 
+  
+  posterior_draws(mhi3_preds$pred) |> 
+  mutate(sex = if_else(grepl("_female", tx_sex), "female", "male"), 
+         tx = gsub("_female", "", tx_sex), 
+         tx = gsub("_male", "", tx), 
+         tx = factor(tx, levels = c("int_old_low","int_old_mod", "int_yng_low","int_yng_mod", "con_old_con"))) |> 
+    mutate(model = "mhi3")
+  ) |> 
+ 
+  ggplot(aes(time, draw, group = paste(drawid, tx, sex), 
+             color = sex)) + geom_line() + 
+  facet_grid(model ~ tx)
+
+
+
+
+
+p2 <- bind_rows(
+  posterior_draws(mhi0_preds$contr) |> 
+  mutate(model = "mhi0"), 
+    posterior_draws(mhi1_preds$contr) |> 
+  mutate(model = "mhi1"), 
+           posterior_draws(mhi2_preds$contr) |> 
+  mutate(model = "mhi2"), 
+  posterior_draws(mhi3_preds$contr) |> 
+  mutate(model = "mhi3")) |>  
+  
+  ggplot(aes(draw, color = model)) + geom_line(stat = "density") + 
+  facet_wrap(~ hypothesis) +
+  geom_vline(xintercept = 0, lty = 2)
+
+
+
+############### Predictions for plotting #####################
+
+
+
+
+
+# These are looking a bit nonsensical, so I guess something here needs more work, but I cant see what at 23:27 in the evening.
+
+p1 <- posterior_draws(mhi2_preds$pred) |> 
+    mutate(sex = if_else(grepl("_female", tx_sex), "female", "male"), 
+         tx = gsub("_female", "", tx_sex), 
+         tx = gsub("_male", "", tx), 
+         tx = factor(tx, levels = c("int_old_low","int_old_mod", "int_yng_low","int_yng_mod", "con_old_con"))) |> 
+  
+  #mutate(draw = draw * sd_corr + mean_corr, 
+         #draw = exp(draw)) |> 
+  
+  
+  summarise(.by = c(tx, sex, time), 
+            m = mean(draw), 
+            lwr50 = quantile(draw, 0.25), 
+            upr50 = quantile(draw, 0.75),  
+            lwr90 = quantile(draw, 0.05), 
+            upr90 = quantile(draw, 0.95),
+            lwr95 = quantile(draw, 0.025), 
+            upr95 = quantile(draw, 0.975)) |> 
+  
+  
+  ggplot(aes(time, m, color = sex, group = paste(tx, sex))) + 
+  
+
+  
+  geom_segment(aes(y = c(lwr50), yend = c(upr50), 
+                   x = time, xend = time), 
+               
+              linewidth = 2) +
+    geom_segment(aes(y = c(lwr90), yend = c(upr90), 
+                   x = time, xend = time), 
+             
+              linewidth = 1.5) +
+    geom_segment(aes(y = c(lwr95), yend = c(upr95), 
+                   x = time, xend = time), 
+          
+              linewidth = 1) +
+
+  geom_line() + 
+  
+    geom_point(size = 3, shape = 21, 
+             aes(color = NULL, fill = sex)) +
+  
+  facet_wrap(~ tx, ncol = 5)
+
+
+
+p2 <- posterior_draws(mhi3_preds$contr) |> 
+ 
+  
+  #mutate(draw = draw * sd_corr , 
+  #       draw = exp(draw)) |> 
+  
+  ggplot(aes(draw)) + geom_line(stat = "density") + 
+  facet_wrap(~ hypothesis) +
+  geom_vline(xintercept = 1, lty = 2) 
+
+
+
+
+
+## Posterior probability
+# The code below produces a table with hypothesis and posterior probability of direction, the proportion of posterior draws where the effect exceeds 1. A pos value of thus 1 means 100% of posterior draws showed the ratio exceeding 1 for that contrast, very strong evidence of a positive effect. Values at 0.5 on the other hand, are essentially a coin flip, no credible directional effect. Useful as a supplementary statistic, perhaps?
+
+
+## Here I added mean, lower and upper to the summarise to get the mean ratio, as well as 95% ETI in addition to pos. 
+ 
+posterior_draws(mhi2_preds$contr) |>
+  mutate(draw = draw * sd_cmyc_high,
+         draw = exp(draw)) |>
+  summarise(.by = hypothesis,
+            mean = mean(draw),
+            lower95 = quantile(draw, 0.025),
+            upper95 = quantile(draw, 0.975),
+            pos = sum(draw > 1) / n())
+
+
+# Since these are ratios (from the exp() transform), the null value is 1, not 0 - i.e., its about whether the 95% ETI excludes 1, not zero. These mean/CI tables should be reported and intepreted as ratios (fold-changes), e.g. "mean ratio = 1.15, 95% ETI [1.08, 1.23] - interpretable as "a 15% increase", not as an absolute cm3 diff. 
+
+
+# For figure plotting
+
+
+pred_cmyc_high <- posterior_draws(mhi2_preds$pred) |>
+  mutate(
+    sex = if_else(grepl("_female", tx_sex), "female", "male"),
+    tx = gsub("_female", "", tx_sex),
+    tx = gsub("_male", "", tx),
+    tx = factor(tx, levels = c("int_old_low", "int_old_mod", "int_yng_low", "int_yng_mod", "con_old_con"))
+  ) |>
+  mutate(draw = draw * sd_cmyc_high + mean_cmyc_high,
+         draw = exp(draw)) |>
+  summarise(.by = c(tx, sex, time),
+            m = mean(draw),
+            lwr50 = quantile(draw, 0.25),
+            upr50 = quantile(draw, 0.75),
+            lwr90 = quantile(draw, 0.05),
+            upr90 = quantile(draw, 0.95),
+            lwr95 = quantile(draw, 0.025),
+            upr95 = quantile(draw, 0.975))
+
+saveRDS(pred_cmyc_high, "data/data-gen/pred_cmyc_high.rds")
+
+
+contrast_cmyc_high <- posterior_draws(mhi2_preds$contr) |>
+  mutate(draw = draw * sd_cmyc_high, draw = exp(draw)) |>
+  summarise(.by = hypothesis,
+            mean = mean(draw),
+            lower95 = quantile(draw, 0.025),
+            upper95 = quantile(draw, 0.975),
+            pos = sum(draw > 1) / n()) |>
+  mutate(pct_change = (mean - 1) * 100,
+         pct_lower  = (lower95 - 1) * 100,
+         pct_upper  = (upper95 - 1) * 100,
+         credible   = ifelse(lower95 > 1 | upper95 < 1, "Yes", "No"))
+
+saveRDS(contrast_cmyc_high, "data/data-gen/contrast_cmyc_high.rds")
+
+
+
+```
+
+#### Results cMyc High Peak
+
+The difference in c-Myc (high peak) protein content between the old intervention group (averaged across volume conditions) and the control group was large by week 3 (99.8%, 95% CI [17.5%, 216.3%], P(>0) = 99.3%). This difference was driven mainly by a decrease in the control group (−34.5%, 95% CI [−56.0%, −5.5%], P(<0) = 98.6%), while the intervention group tended to increase (25.9%, 95% CI [−8.9%, 68.1%], P(>0) = 92.0%). There was weak evidence of an increase in young adults (averaged across volume conditions; 18.6%, 95% CI [−12.5%, 57.5%], P(>0) = 85.9%), with no evidence of a difference from older adults (−3.5%, 95% CI [−37.8%, 45.0%], P(<0) = 61.5%). Within young adults, there was no evidence of a change with low-volume training (4.4%, 95% CI [−30.1%, 49.1%], P(>0) = 55.2%), while moderate-volume training tended to increase c-Myc (37.3%, 95% CI [−12.2%, 106.2%], P(>0) = 91.5%). There was weak evidence of a larger increase under moderate volume (36.2%, 95% CI [−23.8%, 127.4%], P(>0) = 83.5%). The same pattern held in older adults: there was no evidence of a change with low-volume training (9.6%, 95% CI [−29.9%, 64.4%], P(>0) = 62.0%), moderate-volume training tended to increase c-Myc (47.9%, 95% CI [−4.7%, 118.4%], P(>0) = 95.5%), and there was weak evidence of a larger increase under moderate volume (41.0%, 95% CI [−24.3%, 138.0%], P(>0) = 84.5%). There was no evidence that the volume effect differed between age groups (5.2%, 95% CI [−55.8%, 114.3%], P(>0) = 46.7%).
+
+
+
+
+
+
+
+<!--
+
+### c-Myc Low Peaks
+
+Experiencing model-complexity issues here, specifically from mlo2.post and mlo3.post. It's possibly a reflection of this peaks signal-to-noise ratio, but Im not sure. 
+
+#### Models
+
+```{r}
+form0 <- bf(ystd ~   0 + tx + tx:time + sex + (1|participant))
+form1 <- bf(ystd ~  time + allocation + allocation:time +  (1|participant) +  (1|participant:leg) + (time | tx_sex))
+form2 <- bf(ystd ~   0 + tx_sex + tx_sex:time  + (1 + time|participant) +  (1|participant:leg))
+form3 <- bf(ystd ~   time + allocation + allocation:time +  (1 + time|participant) +  (1|participant:leg) + (time | tx_sex))
+
+
+# Priors cmyc high
+get_prior(form0, data = myc_low.dat)
+get_prior(form1, data = myc_low.dat)
+get_prior(form2, data = myc_low.dat)
+get_prior(form3, data = myc_low.dat)
+
+pri0 <- c(
+  # Sex diffs
+  prior(normal(0, 1), class = "b", coef = "sexmale"), 
+  # Group-level intercepts - all parameters specifically referenced
+  prior(normal(0, 1), class = "b", coef = "txcon_old_con"), 
+  prior(normal(0, 1), class = "b", coef = "txint_old_low"), 
+  prior(normal(0, 1), class = "b", coef = "txint_old_mod"), 
+  prior(normal(0, 1), class = "b", coef = "txint_yng_low"), 
+  prior(normal(0, 1), class = "b", coef = "txint_yng_mod"),
+  
+  # time-Post effects
+  prior(normal(0, 1), class = "b", coef = "txcon_old_con:timew3"), 
+  prior(normal(0, 1), class = "b", coef = "txint_old_low:timew3"), 
+  prior(normal(0, 1), class = "b", coef = "txint_old_mod:timew3"), 
+  prior(normal(0, 1), class = "b", coef = "txint_yng_low:timew3"), 
+  prior(normal(0, 1), class = "b", coef = "txint_yng_mod:timew3"),
+  
+  # Random effect (participant)
+  prior(exponential(1), class = sd), 
+  
+  prior(exponential(1), class = sigma)
+)
+
+
+pri1 <- c(
+  
+  # Intercept + global time slope
+  prior(normal(0, 1), class = "Intercept"), 
+  prior(normal(0, 1), class = "b"), 
+  
+  # Correlations of varying effects within groups
+  #prior(lkj(2), class = "cor", group = "tx_sex"),
+  
+  # Random effect (participant)
+  prior(exponential(1), class = sd), 
+  
+  prior(exponential(1), class = sigma)
+  
+)
+
+
+pri2 <- c(
+  
+  # All fixed effects
+  prior(normal(0, 1), class = "b"), 
+
+  prior(lkj(2), class = "cor", group = "participant"),
+  
+  # Random effect (participant and tx_sex) specifically referenced 
+  prior(exponential(1), class = sd, group = "participant"),
+  prior(exponential(1), class = sd, group = "participant:leg"),
+  # Sigma
+  prior(exponential(1), class = sigma)
+  
+)
+
+
+pri3 <- c(
+  
+  # Intercept + global time slope
+  prior(normal(0, 1), class = "Intercept"), 
+  prior(normal(0, 1), class = "b"), 
+  
+  # Correlations of varying effects within groups
+ # prior(lkj(2), class = "cor", group = "tx_sex"),
+  prior(lkj(2), class = "cor", group = "participant"),
+  
+  # Random effect (participant)
+  prior(exponential(1), class = sd), 
+  
+  prior(exponential(1), class = sigma)
+  
+)
+
+
+
+
+mlo0.pp <- brm(form0, 
+             prior = pri0, 
+             data = myc_low.dat, 
+             file = "fits/05-molecular/mlo0",
+             file_refit = "on_change",
+             sample_prior = "only")
+
+mlo1.pp <- brm(form1, 
+             prior = pri1, 
+             data = myc_low.dat, 
+             file = "fits/05-molecular/mlo1",
+             file_refit = "on_change",
+             sample_prior = "only")
+
+mlo2.pp <- brm(form2, 
+             prior = pri2, 
+             data = myc_low.dat, 
+             file = "fits/05-molecular/mlo2",
+             file_refit = "on_change",
+             sample_prior = "only")
+
+mlo3.pp <- brm(form3, 
+             prior = pri3, 
+             data = myc_low.dat, 
+             file = "fits/05-molecular/mlo3",
+             file_refit = "on_change",
+             sample_prior = "only")
+
+# Set up predictions/contrasts for model 0
+
+#predictions(mu0.pp, 
+#            newdata = datagrid(tx = unique, 
+#                               time = unique),
+#            )
+
+mlo0_pred_contr <- function(m, nd1, nd2) {
+  
+  contr <-  predictions(
+    # The model object
+    m, 
+    # New data specified with the datagrid
+    newdata = datagrid(tx = unique, 
+                       time = unique), 
+    
+    # Number of draws 
+    ndraws = nd1,
+    # Specify contrasts
+    hypothesis = c(
+              "int_old_low_delta" = "b2 - b1 = 0", 
+               "int_old_mod_delta" = "b4 - b3 = 0", 
+               "int_yng_low_delta" = "b6 - b5 = 0", 
+               "int_yng_mod_delta" = "b8 - b7 = 0", 
+               "con_old_con_delta" = "b10 - b9 = 0", 
+              # Average group diffs
+              "yng_vs_old_delta" = "(((b8 - b7) + (b6 - b5)) / 2)  - (((b2 - b1) + (b4 - b3))/2) = 0", 
+              "old_vs_con_delta" = "((b2 - b1) + (b4 - b3))/2  - (b10 - b9) = 0",
+              # Volume effects diffs
+              "yng_mod_vs_low" = "(b8 - b7) - (b6 - b5) = 0",
+              "old_mod_vs_low" = "(b4 - b3) - (b2 - b1) = 0", 
+              # volume effect diffs between age groups
+              "yng_vs_old_vol" = "((b8 - b7) - (b6 - b5)) - ((b4 - b3) - (b2 - b1)) = 0"
+                        ))
+  
+    pred <- predictions(
+      m, 
+      # Number of draws
+      ndraws = nd2,
+      # Predict only over the data grid                  
+            newdata = datagrid(tx = unique, 
+                               time = unique, 
+                               sex = unique), 
+      re_formula = NA)
+    
+    return(
+      list(
+      contr = contr, 
+      pred = pred
+      )
+    )
+
+}
+  
+
+
+
+
+mlo1_pred_contr <- function(m, nd1, nd2) {
+  
+  # We need a custom grid to avoid counterfactual tx_sex/allocation 
+  # groupings
+  grid <- myc_low.dat |> 
+    distinct(tx_sex, allocation) |> 
+    expand_grid(time = unique(myc_low.dat$time))
+  
+  contr <-  predictions(
+    # The model object
+    m, 
+    # New data specified from the above grid
+    newdata = grid, 
+    
+    re_formula = ~ (time | tx_sex),
+    
+    # Number of draws 
+    ndraws = nd1,
+    # Specify contrasts
+    by = c("tx_sex", "time"), 
+    hypothesis = c(
+       "int_old_low_delta" = "((b2-b1)+(b4-b3))/2 = 0", 
+       "int_old_mod_delta" = "((b6-b5)+(b8-b7))/2 = 0", 
+       "int_yng_low_delta" = "((b10-b9)+(b12-b11))/2 = 0", 
+       "int_yng_mod_delta" = "((b14-b13)+(b16-b15))/2  = 0", 
+       "con_old_con_delta" = "((b18-b17)+(b20-b19))/2 = 0", 
+      # Average group diffs
+      "yng_vs_old_delta" = "(((b14-b13)+(b16-b15))/2 + ((b10-b9)+(b12-b11))/2)/2 - (((b6-b5)+(b8-b7))/2 + ((b2-b1)+(b4-b3))/2)/2 = 0 ",
+      "old_vs_con_delta" = "((((b6-b5)+(b8-b7))/2 + ((b2-b1)+(b4-b3))/2) / 2)  - (((b18-b17)+(b20-b19))/2) = 0",
+      # Volume effects diffs
+      "yng_mod_vs_low" = "((b14-b13)+(b16-b15))/2 - ((b10-b9)+(b12-b11))/2 = 0",
+      "old_mod_vs_low" = "((b6-b5)+(b8-b7))/2 - ((b2-b1)+(b4-b3))/2 = 0", 
+      # volume effect diffs between age groups
+      "yng_vs_old_vol" = "(((b14-b13)+(b16-b15))/2 - ((b10-b9)+(b12-b11))/2) - (((b6-b5)+(b8-b7))/2 - ((b2-b1)+(b4-b3))/2) = 0"
+      )
+    )
+  
+    pred <- predictions(
+      m, 
+      # Number of draws
+      ndraws = nd2,
+      # Predict only over the data grid                  
+            newdata = grid, 
+      re_formula = ~ (time | tx_sex))
+    
+    return(
+      list(
+      contr = contr, 
+      pred = pred
+      )
+    )
+
+}
+
+mlo2_pred_contr <- function(m, nd1, nd2) {
+  
+  contr <-  predictions(
+    # The model object
+    m, 
+    # New data specified with the datagrid
+    newdata = datagrid(tx_sex = unique, 
+                       time = unique), 
+    re_formula = NA,
+    
+    
+    # Number of draws 
+    ndraws = nd1,
+    # Specify contrasts
+      hypothesis = c(
+              "int_old_low_delta" = "((b2-b1)+(b4-b3))/2 = 0", 
+               "int_old_mod_delta" = "((b6-b5)+(b8-b7))/2 = 0", 
+               "int_yng_low_delta" = "((b10-b9)+(b12-b11))/2 = 0", 
+               "int_yng_mod_delta" = "((b14-b13)+(b16-b15))/2  = 0", 
+               "con_old_con_delta" = "((b18-b17)+(b20-b19))/2 = 0", 
+              
+               # Average group diffs
+              "yng_vs_old_delta" = "(((b14-b13)+(b16-b15))/2 + ((b10-b9)+(b12-b11))/2)/2 - (((b6-b5)+(b8-b7))/2 + ((b2-b1)+(b4-b3))/2)/2 = 0 ",
+              "old_vs_con_delta" = "((((b6-b5)+(b8-b7))/2 + ((b2-b1)+(b4-b3))/2) / 2)  - (((b18-b17)+(b20-b19))/2) = 0",
+              # Volume effects diffs
+              "yng_mod_vs_low" = "((b14-b13)+(b16-b15))/2 - ((b10-b9)+(b12-b11))/2 = 0",
+              "old_mod_vs_low" = "((b6-b5)+(b8-b7))/2 - ((b2-b1)+(b4-b3))/2 = 0", 
+              # volume effect diffs between age groups
+              "yng_vs_old_vol" = "(((b14-b13)+(b16-b15))/2 - ((b10-b9)+(b12-b11))/2) - (((b6-b5)+(b8-b7))/2 - ((b2-b1)+(b4-b3))/2) = 0"
+              
+            ))
+  
+    pred <- predictions(
+      m, 
+      # Number of draws
+      ndraws = nd2,
+      # Predict only over the data grid                  
+            newdata = datagrid(tx_sex = unique, 
+                               time = unique), 
+        re_formula = NA)
+    
+    return(
+      list(
+      contr = contr, 
+      pred = pred
+      )
+    )
+
+}
+
+mlo3_pred_contr <- function(m, nd1, nd2) {
+  
+  # We need a custom grid to avoid counterfactual tx_sex/allocation 
+  # groupings
+  grid <- myc_low.dat |> 
+    distinct(tx_sex, allocation) |> 
+    expand_grid(time = unique(myc_low.dat$time))
+  
+  contr <-  predictions(
+    # The model object
+    m, 
+    # New data specified from the above grid
+    newdata = grid, 
+    
+    re_formula = ~ (time | tx_sex),
+    
+    # Number of draws 
+    ndraws = nd1,
+    # Specify contrasts
+    by = c("tx_sex", "time"), 
+    hypothesis = c(
+       "int_old_low_delta" = "((b2-b1)+(b4-b3))/2 = 0", 
+       "int_old_mod_delta" = "((b6-b5)+(b8-b7))/2 = 0", 
+       "int_yng_low_delta" = "((b10-b9)+(b12-b11))/2 = 0", 
+       "int_yng_mod_delta" = "((b14-b13)+(b16-b15))/2  = 0", 
+       "con_old_con_delta" = "((b18-b17)+(b20-b19))/2 = 0", 
+      # Average group diffs
+      "yng_vs_old_delta" = "(((b14-b13)+(b16-b15))/2 + ((b10-b9)+(b12-b11))/2)/2 - (((b6-b5)+(b8-b7))/2 + ((b2-b1)+(b4-b3))/2)/2 = 0 ",
+      "old_vs_con_delta" = "((((b6-b5)+(b8-b7))/2 + ((b2-b1)+(b4-b3))/2) / 2)  - (((b18-b17)+(b20-b19))/2) = 0",
+      # Volume effects diffs
+      "yng_mod_vs_low" = "((b14-b13)+(b16-b15))/2 - ((b10-b9)+(b12-b11))/2 = 0",
+      "old_mod_vs_low" = "((b6-b5)+(b8-b7))/2 - ((b2-b1)+(b4-b3))/2 = 0", 
+      # volume effect diffs between age groups
+      "yng_vs_old_vol" = "(((b14-b13)+(b16-b15))/2 - ((b10-b9)+(b12-b11))/2) - (((b6-b5)+(b8-b7))/2 - ((b2-b1)+(b4-b3))/2) = 0"
+      )
+    )
+  
+    pred <- predictions(
+      m, 
+      # Number of draws
+      ndraws = nd2,
+      # Predict only over the data grid                  
+            newdata = grid, 
+      re_formula = ~ (time | tx_sex))
+    
+    return(
+      list(
+      contr = contr, 
+      pred = pred
+      )
+    )
+}
+
+
+
+  
+mlo0_preds <- mlo0_pred_contr(mlo0.pp, nd1 = 1000, nd2 = 50)
+mlo1_preds <- mlo1_pred_contr(mlo1.pp, nd1 = 1000, nd2 = 50)
+mlo2_preds <- mlo2_pred_contr(mlo2.pp, nd1 = 1000, nd2 = 50)
+mlo3_preds <- mlo3_pred_contr(mlo3.pp, nd1 = 1000, nd2 = 50)
+
+
+# Prior predictive simulations
+
+p1 <- bind_rows(
+  posterior_draws(mlo0_preds$pred) |> 
+  data.frame() |> 
+    mutate(model = "mlo0"), 
+  
+  posterior_draws(mlo1_preds$pred) |> 
+  mutate(sex = if_else(grepl("_female", tx_sex), "female", "male"), 
+         tx = gsub("_female", "", tx_sex), 
+         tx = gsub("_male", "", tx), 
+         tx = factor(tx, levels = c("int_old_low","int_old_mod", "int_yng_low","int_yng_mod", "con_old_con"))) |>
+    mutate(model = "mlo1"), 
+  
+  posterior_draws(mlo2_preds$pred) |> 
+  mutate(sex = if_else(grepl("_female", tx_sex), "female", "male"), 
+         tx = gsub("_female", "", tx_sex), 
+         tx = gsub("_male", "", tx), 
+         tx = factor(tx, levels = c("int_old_low","int_old_mod", "int_yng_low","int_yng_mod", "con_old_con"))) |> 
+    mutate(model = "mlo2"), 
+  
+  posterior_draws(mlo3_preds$pred) |> 
+  mutate(sex = if_else(grepl("_female", tx_sex), "female", "male"), 
+         tx = gsub("_female", "", tx_sex), 
+         tx = gsub("_male", "", tx), 
+         tx = factor(tx, levels = c("int_old_low","int_old_mod", "int_yng_low","int_yng_mod", "con_old_con"))) |>
+    mutate(model = "mlo3")
+    ) |> 
+ 
+  ggplot(aes(time, draw, group = paste(drawid, tx, sex), 
+             color = sex)) + geom_line() + 
+  facet_grid(model ~ tx)
+
+
+
+
+
+
+p2 <- bind_rows(
+  posterior_draws(mlo0_preds$contr) |> 
+  mutate(model = "mlo0"), 
+    posterior_draws(mlo1_preds$contr) |> 
+  mutate(model = "mlo1"), 
+           posterior_draws(mlo2_preds$contr) |> 
+  mutate(model = "mlo2"), 
+   posterior_draws(mlo3_preds$contr) |> 
+  mutate(model = "mlo3")) |>  
+  
+  ggplot(aes(draw, color = model)) + geom_line(stat = "density") + 
+  facet_wrap(~ hypothesis) +
+  geom_vline(xintercept = 0, lty = 2) + 
+  coord_cartesian(xlim = c(-5, 5))
+
+
+
+```
+
+```{r}
+### Get the posterior distribution
+
+mlo0.post <- update(mlo0.pp, 
+                  sample_prior = "no", 
+                  iter = 4000,
+                  file = "fits/05-molecular/mlo0.post",
+                  file_refit = "on_change")
+
+
+
+mlo1.post <- update(mlo1.pp, 
+                  sample_prior = "no", 
+                  cores = 4,
+                  control = list(adapt_delta = 0.95, 
+                                 max_treedepth = 15),
+                  iter = 4000,
+                  file = "fits/05-molecular/mlo1.post",
+                  file_refit = "on_change")
+
+
+
+mlo2.post <- update(mlo2.pp, 
+                  sample_prior = "no", 
+                  cores = 4,
+                   control = list(adapt_delta = 0.999, 
+                                 max_treedepth = 15),
+                  iter = 10000,
+                  file = "fits/05-molecular/mlo2.post",
+                  file_refit = "on_change")
+
+
+# Upping from 0.99 to 0.999 adapt_delta due to low-BFMI warnings
+
+mlo3.post <- update(mlo3.pp, 
+                  sample_prior = "no", 
+                  cores = 4,
+                  control = list(adapt_delta = 0.99, 
+                                max_treedepth = 15),
+                  iter = 10000,
+                 file = "fits/05-molecular/mlo3.post",
+                 file_refit = "on_change")
+
+
+#rhat(mhi3.post) 
+#rhat_vals <- brms::rhat(mhi3.post)
+#max(rhat_vals)
+#rhat_vals[rhat_vals > 1.01] 
+# rhat checks out, 0 above 1.01, highest at 1.004
+
+#neff_ratio(mhi3.post)
+
+#total_draws <- brms::ndraws(mhi3.post)
+#total_draws
+
+#neff_vals <- brms::neff_ratio(mhi3.post)
+#ess_vals <- neff_vals * total_draws
+
+#min(ess_vals)                  
+#ess_vals[ess_vals < 400]       
+# checks out barely, min ESS at 1128, with zero below 400
+
+
+## Posterior predictive checks
+
+
+
+pp_check(mlo2.post, type = "dens_overlay_grouped", 
+         group = "tx_sex")
+
+pp_check(mlo2.post)
+
+# Not sure about these, model 2 looks a bit more divergent than the others ive seen, model 3 looks fine
+
+
+
+
+```
+
+```{r}
+# Group comparisons
+
+mhi0_preds <- mhi0_pred_contr(mhi0.post, nd1 = 4000, nd2 = 50)
+mhi1_preds <- mhi1_pred_contr(mhi1.post, nd1 = 4000, nd2 = 50)
+mhi2_preds <- mhi2_pred_contr(mhi2.post, nd1 = 4000, nd2 = 50)
+mhi3_preds <- mhi3_pred_contr(mhi3.post, nd1 = 4000, nd2 = 50)
+
+
+p1 <- bind_rows(
+  posterior_draws(mhi0_preds$pred) |> 
+  data.frame() |> 
+    mutate(model = "mhi0"), 
+  
+  posterior_draws(mhi1_preds$pred) |> 
+  mutate(sex = if_else(grepl("_female", tx_sex), "female", "male"), 
+         tx = gsub("_female", "", tx_sex), 
+         tx = gsub("_male", "", tx), 
+         tx = factor(tx, levels = c("int_old_low","int_old_mod", "int_yng_low","int_yng_mod", "con_old_con"))) |>
+    mutate(model = "mhi1"), 
+  
+  posterior_draws(mhi2_preds$pred) |> 
+  mutate(sex = if_else(grepl("_female", tx_sex), "female", "male"), 
+         tx = gsub("_female", "", tx_sex), 
+         tx = gsub("_male", "", tx), 
+         tx = factor(tx, levels = c("int_old_low","int_old_mod", "int_yng_low","int_yng_mod", "con_old_con"))) |> 
+    mutate(model = "mhi2"), 
+  
+  posterior_draws(mhi3_preds$pred) |> 
+  mutate(sex = if_else(grepl("_female", tx_sex), "female", "male"), 
+         tx = gsub("_female", "", tx_sex), 
+         tx = gsub("_male", "", tx), 
+         tx = factor(tx, levels = c("int_old_low","int_old_mod", "int_yng_low","int_yng_mod", "con_old_con"))) |> 
+    mutate(model = "mhi3")
+  ) |> 
+ 
+  ggplot(aes(time, draw, group = paste(drawid, tx, sex), 
+             color = sex)) + geom_line() + 
+  facet_grid(model ~ tx)
+
+
+
+
+
+p2 <- bind_rows(
+  posterior_draws(mhi0_preds$contr) |> 
+  mutate(model = "mhi0"), 
+    posterior_draws(mhi1_preds$contr) |> 
+  mutate(model = "mhi1"), 
+           posterior_draws(mhi2_preds$contr) |> 
+  mutate(model = "mhi2"), 
+  posterior_draws(mhi3_preds$contr) |> 
+  mutate(model = "mhi3")) |>  
+  
+  ggplot(aes(draw, color = model)) + geom_line(stat = "density") + 
+  facet_wrap(~ hypothesis) +
+  geom_vline(xintercept = 0, lty = 2)
+
+
+
+############### Predictions for plotting #####################
+
+
+
+
+
+# These are looking a bit nonsensical, so I guess something here needs more work, but I cant see what at 23:27 in the evening.
+
+p1 <- posterior_draws(mhi2_preds$pred) |> 
+    mutate(sex = if_else(grepl("_female", tx_sex), "female", "male"), 
+         tx = gsub("_female", "", tx_sex), 
+         tx = gsub("_male", "", tx), 
+         tx = factor(tx, levels = c("int_old_low","int_old_mod", "int_yng_low","int_yng_mod", "con_old_con"))) |> 
+  
+  #mutate(draw = draw * sd_corr + mean_corr, 
+         #draw = exp(draw)) |> 
+  
+  
+  summarise(.by = c(tx, sex, time), 
+            m = mean(draw), 
+            lwr50 = quantile(draw, 0.25), 
+            upr50 = quantile(draw, 0.75),  
+            lwr90 = quantile(draw, 0.05), 
+            upr90 = quantile(draw, 0.95),
+            lwr95 = quantile(draw, 0.025), 
+            upr95 = quantile(draw, 0.975)) |> 
+  
+  
+  ggplot(aes(time, m, color = sex, group = paste(tx, sex))) + 
+  
+
+  
+  geom_segment(aes(y = c(lwr50), yend = c(upr50), 
+                   x = time, xend = time), 
+               
+              linewidth = 2) +
+    geom_segment(aes(y = c(lwr90), yend = c(upr90), 
+                   x = time, xend = time), 
+             
+              linewidth = 1.5) +
+    geom_segment(aes(y = c(lwr95), yend = c(upr95), 
+                   x = time, xend = time), 
+          
+              linewidth = 1) +
+
+  geom_line() + 
+  
+    geom_point(size = 3, shape = 21, 
+             aes(color = NULL, fill = sex)) +
+  
+  facet_wrap(~ tx, ncol = 5)
+
+
+
+p2 <- posterior_draws(mhi3_preds$contr) |> 
+ 
+  
+  #mutate(draw = draw * sd_corr , 
+  #       draw = exp(draw)) |> 
+  
+  ggplot(aes(draw)) + geom_line(stat = "density") + 
+  facet_wrap(~ hypothesis) +
+  geom_vline(xintercept = 1, lty = 2) 
+
+
+
+
+
+## Posterior probability
+# The code below produces a table with hypothesis and posterior probability of direction, the proportion of posterior draws where the effect exceeds 1. A pos value of thus 1 means 100% of posterior draws showed the ratio exceeding 1 for that contrast, very strong evidence of a positive effect. Values at 0.5 on the other hand, are essentially a coin flip, no credible directional effect. Useful as a supplementary statistic, perhaps?
+
+
+## Here I added mean, lower and upper to the summarise to get the mean ratio, as well as 95% ETI in addition to pos. 
+ 
+posterior_draws(mlo2_preds$contr) |>
+  mutate(draw = draw * sd_cmyc_low,
+         draw = exp(draw)) |>
+  summarise(.by = hypothesis,
+            mean = mean(draw),
+            lower95 = quantile(draw, 0.025),
+            upper95 = quantile(draw, 0.975),
+            pos = sum(draw > 1) / n())
+
+
+# Since these are ratios (from the exp() transform), the null value is 1, not 0 - i.e., its about whether the 95% ETI excludes 1, not zero. These mean/CI tables should be reported and intepreted as ratios (fold-changes), e.g. "mean ratio = 1.15, 95% ETI [1.08, 1.23] - interpretable as "a 15% increase", not as an absolute cm3 diff. 
+
+# For figure plotting
+
+
+pred_cmyc_high <- posterior_draws(mhi2_preds$pred) |>
+  mutate(
+    sex = if_else(grepl("_female", tx_sex), "female", "male"),
+    tx = gsub("_female", "", tx_sex),
+    tx = gsub("_male", "", tx),
+    tx = factor(tx, levels = c("int_old_low", "int_old_mod", "int_yng_low", "int_yng_mod", "con_old_con"))
+  ) |>
+  mutate(draw = draw * sd_cmyc_high + mean_cmyc_high,
+         draw = exp(draw)) |>
+  summarise(.by = c(tx, sex, time),
+            m = mean(draw),
+            lwr50 = quantile(draw, 0.25),
+            upr50 = quantile(draw, 0.75),
+            lwr90 = quantile(draw, 0.05),
+            upr90 = quantile(draw, 0.95),
+            lwr95 = quantile(draw, 0.025),
+            upr95 = quantile(draw, 0.975))
+
+saveRDS(pred_cmyc_high, "data/data-gen/pred_cmyc_high.rds")
+
+
+contrast_cmyc_high <- posterior_draws(mhi2_preds$contr) |>
+  mutate(draw = draw * sd_cmyc_high, draw = exp(draw)) |>
+  summarise(.by = hypothesis,
+            mean = mean(draw),
+            lower95 = quantile(draw, 0.025),
+            upper95 = quantile(draw, 0.975),
+            pos = sum(draw > 1) / n()) |>
+  mutate(pct_change = (mean - 1) * 100,
+         pct_lower  = (lower95 - 1) * 100,
+         pct_upper  = (upper95 - 1) * 100,
+         credible   = ifelse(lower95 > 1 | upper95 < 1, "Yes", "No"))
+
+saveRDS(contrast_cmyc_high, "data/data-gen/contrast_cmyc_high.rds")
+
+
+
+```
+
+
+
+
+
+
+
+-->
+
+
+
+
+
+
+

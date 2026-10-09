@@ -1,9 +1,9 @@
-## Protein Figure
+## Protein Figure: UBF (left column) and c-Myc high peak (right column), side by side
 
 library(tidyverse)
 library(patchwork)
 
-# --- Load saved data ---
+# --- Load saved data (written by the "Primary results (Run A)" chunk) ---
 pred_ubf      <- readRDS("data/data-gen/pred_ubf.rds")
 contrast_ubf  <- readRDS("data/data-gen/contrast_ubf.rds")
 
@@ -34,6 +34,7 @@ tx_names <- names(tx_labels)
 
 
 # --- Credible-change markers, per outcome ---
+# An asterisk marks a group whose pre -> week 3 change has a 95% interval excluding zero
 
 credible_ubf <- contrast_ubf |>
   filter(hypothesis %in% paste0(tx_names, "_delta"), credible == "Yes") |>
@@ -46,7 +47,8 @@ credible_cmyc <- contrast_cmyc_high |>
 
 # --- Reusable builder functions ---
 
-make_left_panel <- function(pred_dat, ylab, time_levels, credible_dat = NULL) {
+# Upper panel: group means at pre and week 3, 95% interval, sexes averaged with equal weight
+make_left_panel <- function(pred_dat, ylab, time_levels, credible_dat = NULL, title = NULL) {
   pred_equal_weighted <- pred_dat |>
     summarise(.by = c(tx, time),
               m     = mean(m),
@@ -74,11 +76,13 @@ make_left_panel <- function(pred_dat, ylab, time_levels, credible_dat = NULL) {
   
   p +
     facet_wrap(~ tx, ncol = 5, labeller = labeller(tx = tx_labels)) +
-    labs(x = "", y = ylab) +
-    theme_classic()
+    scale_x_discrete(labels = c(pre = "Pre", w3 = "Week 3")) +
+    labs(x = "", y = ylab, title = title) +
+    theme_classic() +
+    theme(plot.title = element_text(face = "bold", size = 11))
 }
 
-# Single-delta right panel (UBF, c-Myc — only pre -> w3 exists)
+# Lower panel: between-group contrasts as ratios of the pre -> week 3 changes
 make_right_panel <- function(contrast_dat) {
   contrast_dat |>
     filter(hypothesis %in% key_contrasts) |>
@@ -92,30 +96,36 @@ make_right_panel <- function(contrast_dat) {
               hjust = -0.2, size = 3, color = "grey30") +
     scale_y_discrete(labels = contrast_labels) +
     scale_x_continuous(expand = expansion(mult = c(0.05, 0.15))) +
-    labs(x = "Ratio (post/pre)", y = NULL) +
+    labs(x = "Ratio of changes (1 = no difference)", y = NULL) +
     theme_classic() +
     theme(axis.text.y = element_text(size = 9))
 }
 
 
-
 # --- Build panels ---
 
-p_left_ubf   <- make_left_panel(pred_ubf, "UBF (corrected area)", c("pre", "w3"), credible_ubf)
+p_left_ubf   <- make_left_panel(pred_ubf, "UBF (corrected area)", c("pre", "w3"), credible_ubf,
+                                title = "UBF")
 p_right_ubf  <- make_right_panel(contrast_ubf)
 
-p_left_cmyc  <- make_left_panel(pred_cmyc_high, "c-Myc, high peak\n(corrected area)", c("pre", "w3"), credible_cmyc)
+p_left_cmyc  <- make_left_panel(pred_cmyc_high, "c-Myc, high peak\n(corrected area)", c("pre", "w3"),
+                                credible_cmyc, title = "c-Myc (high peak)")
 p_right_cmyc <- make_right_panel(contrast_cmyc_high)
 
 
-# --- Combine: 3-row grid ---
+# --- Combine: one column per protein (group means on top, contrasts below) ---
+# Plot order A, B, C, D matches the tags: A/B = UBF, C/D = c-Myc
 
-p_protein <- (p_left_ubf  + p_right_ubf  + plot_layout(widths = c(2, 1))) /
-  (p_left_cmyc + p_right_cmyc + plot_layout(widths = c(2, 1))) 
+p_protein <- wrap_plots(
+  list(p_left_ubf, p_right_ubf, p_left_cmyc, p_right_cmyc),
+  design  = "AC\nBD",
+  heights = c(1, 1.15)
+) +
+  plot_annotation(tag_levels = "A")
 
 p_protein
 
 ggsave("figures/fig-protein.png", p_protein,
-       width = 10, height = 15, dpi = 300)
+       width = 14, height = 7.5, dpi = 300)
 
 saveRDS(p_protein, "figures/fig-protein.RDS")
