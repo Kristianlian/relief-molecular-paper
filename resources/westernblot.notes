@@ -1,5 +1,15 @@
 Western blot notes
 
+
+------------------ c-Myc -------------------------------
+Measurements to use
+- P1_R3 = 1-8 (- 6 and 7)
+- P2 = 9-16 (- 11-13)
+- P3 = 17-24 (- 21, 23)
+- P4 = 25-30 + 21,23
+- P5 = 2, 6-8, 11-13, 26 (-2)
+
+
 Errors/warnings after jess runs
 
 c-Myc - Peak fit warnings
@@ -20,3 +30,32 @@ c-Myc - Standards warnings
   - P2: 11.1, 12.1, 13.1, 13.2, 16.3
   - P3: 18.1, 18.3, 19.1, 21.1
   - P5: 8.3, 26.2, 26.3
+
+------------------ UBF -----------------------------
+
+Measurements to use
+- P1 = sample 1-8
+- P5 = sample 9-16 re-runs
+- P3 = sample 17-23 + 9 (dont use sample 9)
+- P4 = sample 25-30 + 10-12 (dont use 10-12)
+
+
+Errors/warnings after jess runs
+
+
+UBF - Peak fit warnings
+- Too many iterations
+  - P1: 3.1, 5.2
+  - P3: 19.1, 22.1
+  - P4: 25.1, 26.3, 27.1, 29.2, 30.2, 10.1, 11.2
+  - P5: 11.3
+- Singular Matrix
+  - P4: 25.2, 12.1
+- Damping overflow
+  - P2: 22.2
+  - P5: 9.1, 
+
+UBF - Standards warnings
+- Low confidence
+  - 9.2
+

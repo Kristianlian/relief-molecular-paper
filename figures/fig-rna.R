@@ -122,7 +122,7 @@ make_right_panel_dual <- function(contrast_dat) {
 
 # --- Build panels ---
 
-p_left_rna   <- make_left_panel(pred_rna, "Total RNA (ng)", c("pre", "w3", "post"), credible_rna)
+p_left_rna   <- make_left_panel(pred_rna, "Total RNA (ng/mg)", c("pre", "w3", "post"), credible_rna)
 p_right_rna  <- make_right_panel_dual(contrast_rna)
 
 p_rna <- (p_left_rna  + p_right_rna  + plot_layout(widths = c(2, 1)))
