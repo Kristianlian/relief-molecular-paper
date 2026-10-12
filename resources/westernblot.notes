@@ -3,11 +3,26 @@ Western blot notes
 
 ------------------ c-Myc -------------------------------
 Measurements to use
-- P1_R3 = 1-8 (- 6 and 7)
-- P2 = 9-16 (- 11-13)
-- P3 = 17-24 (- 21, 23)
-- P4 = 25-30 + 21,23
-- P5 = 2, 6-8, 11-13, 26 (-2)
+- P1_R3 = 1-8 (- 6 and 7)             : Plate 1. run 3, samples 1, 2, 3, 4, 5
+- P2 = 9-16 (- 11-13)                 : Plate 2, samples 9, 10, 14, 15, 16
+- P3 = 17-24 (- 21, 23)               : Plate 3, samples 17, 18, 19, 20, 22, 24
+- P4 = 25-30 + 21,23                  : Plate 4, ALL samples
+- P5 = 2, 6-8, 11-13, 26 (-2)         : Plate 5, 6, 7, 8, 11, 12, 13 and 26
+
+Samples to include
+- P1 run 3: 1, 2, 3, 4, 5
+- P2: 9, 10, 14, 15, 16
+- P3: 17, 18, 19, 20, 22, 24
+- P4: ALL samples
+- P5: 6, 7, 8, 11, 12, 13 and 26
+
+Samples to exclude
+- P1: 6, 7, 8
+- P2: 11, 12, 13
+- P3: 21, 23
+- P4: none
+- P5: 2
+
 
 
 Errors/warnings after jess runs
@@ -38,6 +53,18 @@ Measurements to use
 - P5 = sample 9-16 re-runs
 - P3 = sample 17-23 + 9 (dont use sample 9)
 - P4 = sample 25-30 + 10-12 (dont use 10-12)
+
+Samples to include
+- P1: All
+- P5, new P2: All
+- P3: 17, 18, 19, 20, 21, 22, 23
+- P4: 25, 26, 27, 28, 29, 30
+
+Samples to exclude
+- P1: none
+- P2: none
+- P3: 9
+- P4: 10, 11, 12
 
 
 Errors/warnings after jess runs
