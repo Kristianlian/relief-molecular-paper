@@ -6,9 +6,9 @@ library(patchwork)
 
 # --- Load saved data ---
 
-pred_rna              <- readRDS("data/data-gen/pred_rna.rds")
-contrast_rna          <- readRDS("data/data-gen/contrast_rna.rds")
-contrast_summary      <- readRDS("data/data-gen/rna_mg_contrast_summary_m5.rds")
+pred_rna              <- readRDS("data/data-gen/pred_rna_m4.rds")
+contrast_rna          <- readRDS("data/data-gen/contrast_rna_4.rds")
+contrast_summary      <- readRDS("data/data-gen/rna_mg_contrast_summary_m4.rds")
 
 contrast_summary |>
   mutate(across(c(fc_est, fc_lower, fc_upper), ~ round((.x - 1) * 100, 2)),

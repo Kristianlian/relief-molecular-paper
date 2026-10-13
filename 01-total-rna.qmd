@@ -642,10 +642,10 @@ saveRDS(all_contrasts_fc_rep, "./data/data-gen/rna_mg_contrasts_fc_m4.rds")
 contrast_summary_rep <- all_contrasts_fc_rep |> 
   group_by(contrast, contrast_group, delta) |> 
   summarise(
-    ystd_est   = median(value),
+    ystd_est   = mean(value),
     ystd_lower = quantile(value, 0.025),
     ystd_upper = quantile(value, 0.975),
-    fc_est     = median(fold_change),
+    fc_est     = mean(fold_change),
     fc_lower   = quantile(fold_change, 0.025),
     fc_upper   = quantile(fold_change, 0.975),
     pos        = sum(fold_change > 1) / n(),   
