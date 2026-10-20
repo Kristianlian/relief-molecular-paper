@@ -61,7 +61,13 @@ p_rnaseq
 saveRDS(p_rnaseq, "figures/fig-rnaseq.RDS")
 
 ggsave("./figures/fig-rnaseq-combined.png", p_rnaseq,
-       width = 10, height = 10, dpi = 300)
+       width = 16, height = 16, units = "cm", dpi = 300)
+
+ggsave("./figures/fig-rnaseq-baseline.png", fig_age_diff,
+       width = 16, height = 10, units = "cm", dpi = 300)
+
+ggsave("./figures/fig-rnaseq-training.png", fig_training_diff,
+       width = 16, height = 10, units = "cm", dpi = 300)
 
 
 

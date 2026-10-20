@@ -665,9 +665,11 @@ summary(m4.post)
 
 # For plotting figures
 
+ref_mg <- exp(mean_mg_rep + mean(rna_rep.dat$mgstd) * sd_mg_rep)   # mg; report in the caption
+
 pred_rna <- get_draws(pred.post_rep) |>
   dplyr::select(drawid, draw, tx, time) |>
-  mutate(draw_bt = exp(draw * sd_rna_rep + mean_rna_rep)) |>
+  mutate(draw_bt = exp(draw * sd_rna_rep + mean_rna_rep) / ref_mg) |>
   summarise(.by = c(tx, time),
             m     = mean(draw_bt),
             lwr50 = quantile(draw_bt, 0.25), upr50 = quantile(draw_bt, 0.75),
