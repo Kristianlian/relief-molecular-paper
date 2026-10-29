@@ -1,0 +1,213 @@
+---
+title: "Total RNA analysis: model building (supplement)"
+format: html
+editor: source
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r}
+#| label: packages-and-settings
+#| message: false
+#| warning: false
+
+library(brms)
+library(tidyverse)
+library(reliefdata)
+```
+
+This document holds the model-building steps behind models 4 and 5 in `total-rna.qmd`. It uses the same data, QC and exclusions (`total-rna-data.R`), with technical replicates averaged per biopsy (`rna.dat`). Models 4 and 5 are fit on the replicate-level data instead.
+
+| Model | Adds | Question |
+|---|---|---|
+| m0 | RNA ~ tissue mass | What is the RNA–mg relationship, ignoring structure? |
+| m1 | participant intercept | How much variance is between participants? |
+| m2 | tx + time (additive) | Do group or time shift RNA level? |
+| m3 | tx × time, participant time slopes, leg | Does the time trajectory differ by group? |
+| m4 (main) | sample within participant, on replicate data | Separates technical replicate noise from sample-level variance |
+| m5 (main) | tx × sex | Matches the sex-stratified structure of the other outcomes |
+
+```{r}
+#| label: data
+
+source("total-rna-data.R")
+```
+
+#### The RNA–tissue mass relationship
+
+```{r}
+#| label: rna-mg-plots
+
+rna.dat |> 
+  ggplot(aes(weight, mean_rna, color = time)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", se = FALSE) +
+  scale_x_log10() +
+  scale_y_log10() +
+  labs(x = "Tissue weight (mg, log scale)", 
+       y = "Total RNA (ng, log scale)")
+
+rna.dat |> 
+  ggplot(aes(mgstd, ystd, color = time)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(x = "Tissue weight (mg, log scale, standardised)", 
+       y = "Total RNA (ng, log scale, standardised)")
+```
+
+#### Model 0: no grouping
+
+A clean look at the relationship.
+
+```{r}
+#| label: m0
+
+form0 <- bf(ystd ~ mgstd)
+get_prior(form0, data = rna.dat)
+
+pri0 <- c(
+  prior(normal(0, 1), class = "Intercept"),
+  prior(normal(1, 1), class = "b", coef = "mgstd"),
+  prior(exponential(1), class = "sigma")
+)
+# Both ystd and mgstd are standardised (mean 0, SD 1).
+# Intercept normal(0, 1): predicted ystd at average log-mg, expected near 0.
+# mgstd normal(1, 1): centred on 1 (RNA expected to scale with tissue mass),
+#   with a wide enough SD to allow a much weaker or stronger relationship.
+# sigma exponential(1): matches the convention in the other brms models.
+
+m0.pp <- brm(form0,
+             prior = pri0,
+             data = rna.dat,
+             sample_prior = "only",
+             file = "fits/01-total-rna/m0.pp",
+             file_refit = "on_change")
+#pp_check(m0.pp, ndraws = 100)
+
+# Prior predictive simulation 
+as_draws_df(m0.pp) |> 
+  filter(.draw %in% 1:100) |> 
+  expand_grid(mgstd = seq(from = -3, to = 3, by = 0.2)) |> 
+  mutate(y = b_Intercept + b_mgstd * mgstd) |> 
+  ggplot(aes(mgstd, y, group = .draw)) + 
+  geom_line(alpha = 0.2) +
+  geom_point(data = rna.dat, aes(mgstd, ystd, group = NULL))
+
+m0.post <- update(m0.pp,
+                  sample_prior = "no",
+                  iter = 4000,
+                  file = "fits/01-total-rna/m0.post",
+                  file_refit = "on_change")
+
+# Posterior predictive simulation 
+as_draws_df(m0.post) |> 
+  filter(.draw %in% 1:100) |> 
+  expand_grid(mgstd = seq(from = -4, to = 3, by = 0.5)) |> 
+  mutate(y = b_Intercept + b_mgstd * mgstd) |> 
+  ggplot(aes(mgstd, y, group = .draw)) + 
+  geom_line(alpha = 0.2) +
+  geom_point(data = rna.dat, aes(mgstd, ystd, group = NULL))
+```
+
+#### Model 1: participant intercept
+
+Accounts for repeated measures. The model now separates between-participant variance (`sd(Intercept)`) from residual variance (`sigma`), so sigma should drop compared with m0.
+
+```{r}
+#| label: m1
+
+form1 <- bf(ystd ~ mgstd + (1 | participant))
+get_prior(form1, data = rna.dat)
+
+pri1 <- c(
+  prior(normal(0, 1), class = "Intercept"),
+  prior(normal(0, 1), class = "b", coef = "mgstd"),
+  prior(exponential(1), class = "sd", group = "participant"),
+  prior(exponential(1), class = "sigma")
+)
+
+m1.pp <- brm(form1,
+             prior = pri1,
+             data = rna.dat,
+             sample_prior = "only",
+             file = "fits/01-total-rna/m1.pp",
+             file_refit = "on_change")
+#pp_check(m1.pp, ndraws = 100)
+
+as_draws_df(m1.pp) |> 
+  filter(.draw %in% 1:100) |> 
+  expand_grid(mgstd = seq(from = -3, to = 3, by = 0.2)) |> 
+  mutate(y = b_Intercept + b_mgstd * mgstd) |> 
+  ggplot(aes(mgstd, y, group = .draw)) + 
+  geom_line(alpha = 0.2) +
+  geom_point(data = rna.dat, aes(mgstd, ystd, group = NULL))
+```
+
+#### Model 2: group and time (additive)
+
+Adds `tx` and `time`. Using `age_group` alone would collapse the old intervention and old control participants, which should stay separate; `tx` keeps them apart (and also adds allocation and volume condition). An alternative would be a factor with only age group and allocation (int_yng, int_old, con_old).
+
+The model is additive: it asks whether group shifts RNA level and whether time shifts RNA level. The reference level is int_old_low at pre (absorbed into the intercept), so each `tx` coefficient is a shift relative to int_old_low, and `txcon_old_con` gives the control difference directly.
+
+```{r}
+#| label: m2
+
+form2 <- bf(ystd ~ mgstd + tx + time + (1 | participant))
+get_prior(form2, data = rna.dat)
+
+pri2 <- c(
+  prior(normal(0, 1), class = "Intercept"),
+  prior(normal(0, 1), class = "b", coef = "mgstd"),
+  prior(normal(0, 1), class = "b", coef = "timew3"),
+  prior(normal(0, 1), class = "b", coef = "timepost"),
+  prior(normal(0, 1), class = "b", coef = "txcon_old_con"),
+  prior(normal(0, 1), class = "b", coef = "txint_old_mod"),
+  prior(normal(0, 1), class = "b", coef = "txint_yng_low"),
+  prior(normal(0, 1), class = "b", coef = "txint_yng_mod"),
+  prior(exponential(1), class = "sd", group = "participant"),
+  prior(exponential(1), class = "sigma")
+)
+
+m2.pp <- brm(form2,
+             prior = pri2,
+             data = rna.dat,
+             sample_prior = "only",
+             file = "fits/01-total-rna/m2.pp",
+             file_refit = "on_change")
+#pp_check(m2.pp, ndraws = 100)
+```
+
+#### Model 3: group × time
+
+Model 2 cannot tell whether the time trajectory itself differs by group (e.g. control flat while the intervention groups rise). Adding `tx:time` tests this. The random effects are also expanded: a time slope per participant lets each participant's trajectory vary, and a leg intercept within participant captures whether a person's low-volume leg runs differently from the moderate-volume leg.
+
+```{r}
+#| label: m3
+
+form3 <- bf(ystd ~ mgstd + tx * time + (1 + time | participant) + (1 | participant:leg))
+get_prior(form3, data = rna.dat)
+
+tx_coefs   <- c("txcon_old_con", "txint_old_mod", "txint_yng_low", "txint_yng_mod")
+time_coefs <- c("timew3", "timepost")
+
+pri3 <- c(
+  prior(normal(0, 1), class = "Intercept"),
+  prior(normal(1, 1), class = "b", coef = "mgstd"),
+  set_prior("normal(0, 1)", class = "b",
+            coef = c(time_coefs, tx_coefs,
+                     paste0(rep(tx_coefs, each = 2), ":", time_coefs))),
+  prior(lkj(2), class = "cor", group = "participant"),
+  prior(exponential(1), class = "sd", group = "participant"),
+  prior(exponential(1), class = "sd", group = "participant:leg"),
+  prior(exponential(1), class = "sigma")
+)
+# lkj(2) for the correlation between participant-level intercepts and time slopes
+
+m3.pp <- brm(form3,
+             prior = pri3,
+             data = rna.dat,
+             sample_prior = "only",
+             file = "fits/01-total-rna/m3.pp",
+             file_refit = "on_change")
+#pp_check(m3.pp, ndraws = 100)
+```

@@ -273,7 +273,7 @@ check_grid <- function(m) {
 # fit's OWN sd_y (standardisation is per protein and per run). Population-level effects only
 # (re_formula = NA). p_dir is the posterior probability in the direction of the estimate;
 # per the reporting rules it is omitted when the 95% interval excludes zero.
-prot_contr <- function(fit, sd_y, ndraws = 4000) {
+prot_contr <- function(fit, sd_y, ndraws = brms::ndraws(fit)) {
   check_grid(fit)
   predictions(fit,
               newdata = datagrid(tx_sex = unique, time = unique),
@@ -375,7 +375,7 @@ save_contrast("cMyc_high", "data/data-gen/contrast_cmyc_high.rds")
 # 4000 draws (the earlier plotting code used 50, too few for 95% intervals).
 tx_levels <- c("int_old_low", "int_old_mod", "int_yng_low", "int_yng_mod", "con_old_con")
 
-make_pred <- function(p, ndraws = 4000) {
+make_pred <- function(p, ndraws = brms::ndraws(run_fit(p, "A"))) {
   predictions(run_fit(p, "A"),
               newdata = datagrid(tx_sex = unique, time = unique),
               re_formula = NA, ndraws = ndraws) |> 
@@ -406,10 +406,80 @@ saveRDS(pred_cmyc_high, "data/data-gen/pred_cmyc_high.rds")
 #### Main results
 
 _UBF_
-Older adults in the intervention group (averaged across volume conditions) tended to increase UBF protein content by week 3 (20.4%, 95% CI [−5.6%, 50.4%], P(>0) = 93.3%), as did the control group (27.6%, 95% CI [−4.2%, 64.8%], P(>0) = 95.2%), with no evidence of a difference between them (−3.9%, 95% CI [−33.2%, 35.9%], P(<0) = 63.1%). Young adults (averaged across volume conditions) also tended to increase UBF (16.9%, 95% CI [−7.1%, 45.2%], P(>0) = 91.0%), with no evidence of a difference from older adults (−1.4%, 95% CI [−29.7%, 33.9%], P(<0) = 57.0%). Within young adults, there was weak evidence of an increase with both low-volume (17.1%, 95% CI [−14.4%, 55.1%], P(>0) = 83.2%) and moderate-volume training (18.2%, 95% CI [−15.8%, 60.2%], P(>0) = 82.6%), with no evidence of a difference between them (3.4%, 95% CI [−34.7%, 56.9%], P(>0) = 51.1%). In older adults, low-volume training tended to increase UBF (29.8%, 95% CI [−8.4%, 77.3%], P(>0) = 92.0%), whereas there was no evidence of a change with moderate-volume training (13.2%, 95% CI [−19.0%, 57.1%], P(>0) = 74.6%), and no evidence of a difference between them (−10.1%, 95% CI [−44.9%, 41.5%], P(<0) = 71.6%). There was no evidence that the volume effect differed between age groups (21.9%, 95% CI [−41.3%, 117.3%], P(>0) = 67.9%).
+Older adults in the intervention group (averaged across volume conditions) tended to increase UBF by week 3 (20.2%, 95% CI [−5.6%, 50.3%], P(>0) = 93.2%, @fig-protein-rna A), as did the control group (26.9%, 95% CI [−4.8%, 65.0%], P(>0) = 95.0%), with no evidence of a difference between them (−3.5%, 95% CI [−33.7%, 36.0%], P(<0) = 61.6%). Young adults also tended to increase UBF (17.2%, 95% CI [−6.6%, 44.2%], P(>0) = 91.6%), with no evidence of a difference from older adults (−1.1%, 95% CI [−29.0%, 34.8%], P(<0) = 56.0%). There was no evidence of an effect of training volume in young (3.9%, 95% CI [−34.0%, 56.6%], P(>0) = 52.4%) or older adults (−10.1%, 95% CI [−45.6%, 40.9%], P(<0) = 72.1%), or that the volume effect differed between age groups (22.4%, 95% CI [−39.3%, 117.1%], P(>0) = 68.1%; @tbl-protein-rna).
 
 _c-Myc High Peak_
-c-Myc (high peak) decreased in the control group by week 3 (−35.8%, 95% CI [−55.4%, −11.2%]). Older adults in the intervention group (averaged across volume conditions) tended to increase c-Myc (26.0%, 95% CI [−6.7%, 65.7%], P(>0) = 93.5%), and their change was greater than that of the control group (102.9%, 95% CI [22.4%, 211.1%]), a difference driven by the decrease in the control group. Young adults (averaged across volume conditions) showed weak evidence of an increase (19.8%, 95% CI [−9.1%, 54.3%], P(>0) = 89.5%), with no evidence of a difference from older adults (−2.9%, 95% CI [−34.8%, 41.5%], P(<0) = 60.1%). Within young adults, there was no evidence of a change with low-volume training (4.4%, 95% CI [−28.5%, 48.4%], P(>0) = 54.9%), whereas moderate-volume training tended to increase c-Myc (40.4%, 95% CI [−9.1%, 106.1%], P(>0) = 93.5%), with weak evidence of a difference between them (39.6%, 95% CI [−24.4%, 134.6%], P(>0) = 85.2%). In older adults, there was no evidence of a change with low-volume training (10.8%, 95% CI [−28.8%, 62.4%], P(>0) = 65.5%), whereas moderate-volume training tended to increase c-Myc (46.6%, 95% CI [−5.8%, 116.2%], P(>0) = 95.6%), again with weak evidence of a difference between them (38.3%, 95% CI [−26.1%, 138.5%], P(>0) = 82.6%). There was no evidence that the volume effect differed between age groups (10.9%, 95% CI [−54.8%, 140.8%], P(>0) = 50.0%).
+c-Myc (high peak, @fig-protein-rna B) decreased in the control group by week 3 (−35.6%, 95% CI [−55.2%, −9.9%]). Older adults in the intervention group (averaged across volume conditions) tended to increase c-Myc (26.6%, 95% CI [−6.4%, 66.5%], P(>0) = 93.7%), and their change was greater than that of the control group (103.1%, 95% CI [23.9%, 209.6%]), a difference driven by the decrease in the control group. Young adults showed weak evidence of an increase (19.4%, 95% CI [−9.7%, 54.7%], P(>0) = 88.8%), with no evidence of a difference from older adults (−3.6%, 95% CI [−35.9%, 39.9%], P(<0) = 61.4%). Moderate-volume training tended to increase c-Myc in both older (46.9%, 95% CI [−5.8%, 116.7%], P(>0) = 95.5%) and young adults (40.2%, 95% CI [−9.5%, 106.6%], P(>0) = 93.3%), with no evidence of a change with low volume (11.6% and 3.9%). There was weak evidence of a larger increase with moderate than low volume in both older (37.7%, 95% CI [−27.6%, 137.8%], P(>0) = 81.8%) and young adults (40.1%, 95% CI [−24.5%, 136.9%], P(>0) = 85.1%), and no evidence that this differed between age groups (11.6%, 95% CI [−55.0%, 135.2%], P(>0) = 51.7%; @tbl-protein-rna).
+
+#### RNA/UBF correlation
+
+```{r}
+
+# Total RNA vs UBF (Run A)
+
+# QC'd total RNA wells. Sourced into its own environment so that its objects
+# (tx_levels, excluded, ...) don't overwrite objects in this document.
+rna_env <- new.env()
+sys.source("./r/total-rna-data.R", envir = rna_env)
+conc.dat <- rna_env$conc.dat
+
+# UBF, Run A: reuse the data the protein models were fitted on
+ubf <- run_data("UBF", "A") |>
+  select(participant, leg, time, ystd)
+
+rna_samp <- conc.dat |>
+  filter(time %in% c("pre", "w3")) |>
+  summarise(.by = c(participant, leg, time),
+            rna = mean(total.rna), weight = first(weight)) |>
+  mutate(rna_mg = rna / weight)
+
+# Week 3: pair by participant and leg. Baseline: one UBF sample per participant,
+# so pair with the participant's mean baseline RNA
+rna_pre <- rna_samp |> filter(time == "pre") |>
+  summarise(.by = participant, rna_mg = mean(rna_mg))
+rna_w3  <- rna_samp |> filter(time == "w3") |> select(participant, leg, rna_mg)
+
+rna_ubf <- bind_rows(
+  ubf |> filter(time == "pre") |> inner_join(rna_pre, by = "participant"),
+  ubf |> filter(time == "w3")  |> inner_join(rna_w3,  by = c("participant", "leg"))
+)
+
+# Check: rows lost in the pairing (expect only participants 3017 and 3092)
+ubf |> count(time) |>
+  left_join(rna_ubf |> count(time, name = "paired"), by = "time")
+
+
+rna_ubf <- rna_ubf |> mutate(rna_z = as.numeric(scale(log(rna_mg))))
+
+m_corr <- brm(rna_z ~ ystd + time + (1 | participant),
+              data = rna_ubf,
+              prior = c(prior(normal(0, 1), class = "b"),
+                        prior(exponential(1), class = "sd"),
+                        prior(exponential(1), class = "sigma")),
+              cores = 4, iter = 4000, seed = 1,
+              file = "fits/04-protein/rna_ubf_corr", file_refit = "on_change")
+summary(m_corr)
+
+mu <- mean(log(rna_ubf$rna_mg)); s <- sd(log(rna_ubf$rna_mg))
+
+nd <- rna_ubf |>
+  summarise(.by = time, lo = min(ystd), hi = max(ystd)) |>
+  reframe(ystd = seq(lo, hi, length.out = 50), .by = time)
+
+corr_lines <- predictions(m_corr, newdata = nd, re_formula = NA) |>
+  as_tibble() |>
+  mutate(rna_mg = exp(estimate * s + mu))   # check the column name in your marginaleffects version
+
+mean(as_draws_df(m_corr)$b_ystd > 0)
+
+saveRDS(rna_ubf,    "data/data-gen/rna_ubf.rds")
+saveRDS(corr_lines, "data/data-gen/corr_lines_rna_ubf.rds")
+
+
+```
+
+
+
 
 
 #### Supplement: choice of model structure

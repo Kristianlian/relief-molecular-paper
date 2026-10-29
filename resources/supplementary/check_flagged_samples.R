@@ -173,3 +173,4 @@ bind_rows(
 
 # If 349's weight is a typo (12 vs 1.2?), see what the w3 change would be:
 persample |> filter(sample == "349") |> mutate(conc_mg_if_1.2mg = conc / 1.2)
+

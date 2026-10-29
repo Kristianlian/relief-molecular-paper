@@ -2,65 +2,22 @@
 
 library(tidyverse)
 library(patchwork)
-library(reliefdata)
 
 # --- Load saved model output ---
 contrast_ubf         <- readRDS("data/data-gen/contrast_ubf.rds")          # Run A
 contrast_cmyc_high   <- readRDS("data/data-gen/contrast_cmyc_high.rds")    # Run A
-contrast_summary_rna <- readRDS("data/data-gen/rna_mg_contrast_summary_m4.rds")
+contrast_summary_rna <- readRDS("data/data-gen/rna_mg_contrast_summary_m5.rds")
+
+# Total RNA vs. UBF: paired data and model-predicted lines, both written by the
+# "Total RNA vs UBF" section of the protein qmd (model m_corr)
+rna_ubf    <- readRDS("data/data-gen/rna_ubf.rds")
+corr_lines <- readRDS("data/data-gen/corr_lines_rna_ubf.rds")
 
 # --- Groups ---
 tx_names  <- c("int_old_low", "int_old_mod", "int_yng_low", "int_yng_mod", "con_old_con")
 tx_labels <- c(int_old_low = "Old\nLow",   int_old_mod = "Old\nMod",
                int_yng_low = "Young\nLow", int_yng_mod = "Young\nMod",
                con_old_con = "Old\nControl")
-
-
-# ============================================================
-# Data for the scatter: UBF (Run A) paired with total RNA
-# ============================================================
-
-# UBF, Run A: same filters as make_prot_dat() in protein-runs.qmd
-ubf <- reliefdata::relief_western |>
-  mutate(participant = as.character(participant)) |>
-  select(participant, leg, sampleid = sample, time, protein, area, corr.area) |>
-  filter(!sampleid %in% c("Biot. Ladder", "DDH2O"),
-         !participant %in% c("3084", "3090"),     # no measurement
-         !is.na(sampleid), protein == "UBF") |>
-  mutate(across(c(area, corr.area), as.numeric),
-         norm_factor = area / corr.area) |>
-  filter(norm_factor >= 0) |>                     # Run A: min_factor = 0 (drops invalid ratios)
-  mutate(y    = log(corr.area),
-         ystd = (y - mean(y, na.rm = TRUE)) / sd(y, na.rm = TRUE),
-         time = factor(time, levels = c("pre", "w3")))
-
-# Check: should equal n for UBF run A in prot_runs
-nrow(ubf)
-
-# Total RNA per sample (mean of the spectrophotometer readings), ng per mg tissue
-rna_samp <- reliefdata::relief_rnaconc |>
-  mutate(participant = as.character(participant),
-         total.rna   = conc * 4 * 25,
-         weight      = as.numeric(weight)) |>
-  filter(!is.na(participant), time %in% c("pre", "w3")) |>
-  summarise(.by = c(participant, leg, time),
-            rna = mean(total.rna, na.rm = TRUE), weight = first(weight)) |>
-  mutate(rna_mg = rna / weight)
-
-# Week 3: pair by participant and leg. Baseline: one UBF sample per participant,
-# so pair with the participant's mean baseline RNA (works whichever leg it came from)
-rna_pre <- rna_samp |> filter(time == "pre") |>
-  summarise(.by = participant, rna_mg = mean(rna_mg))
-rna_w3  <- rna_samp |> filter(time == "w3") |> select(participant, leg, rna_mg)
-
-rna_ubf <- bind_rows(
-  ubf |> filter(time == "pre") |> inner_join(rna_pre, by = "participant"),
-  ubf |> filter(time == "w3")  |> inner_join(rna_w3,  by = c("participant", "leg"))
-)
-
-# Check: UBF rows vs. rows paired with RNA (expect few or none lost)
-ubf |> count(time) |>
-  left_join(rna_ubf |> count(time, name = "paired"), by = "time")
 
 
 # ============================================================
@@ -77,7 +34,7 @@ protein_change <- function(contrast_dat, outcome) {
               est = pct_change, lo = pct_lower, hi = pct_upper)
 }
 
-# Total RNA (model 4): baseline -> week 3 and baseline -> post
+# Total RNA (model 5): baseline -> week 3 and baseline -> post
 rna_change <- contrast_summary_rna |>
   filter(contrast %in% paste0(rep(tx_names, each = 2), "_", c("w3", "post"))) |>
   transmute(outcome = "Total RNA",
@@ -114,7 +71,6 @@ make_change_panel <- function(dat, title, legend = FALSE) {
                        name = NULL) +
     labs(x = NULL, y = "Change from baseline (%)", title = title) +
     theme_classic() +
-    theme_classic() +
     theme(plot.title = element_text(face = "bold", size = 11),
           legend.position = if (legend) "bottom" else "none",
           legend.box = "vertical",
@@ -125,9 +81,12 @@ p_ubf  <- make_change_panel(filter(change_dat, outcome == "UBF"), "UBF")
 p_cmyc <- make_change_panel(filter(change_dat, outcome == "c-Myc (high peak)"), "c-Myc (high peak)")
 p_rna  <- make_change_panel(filter(change_dat, outcome == "Total RNA"), "Total RNA", legend = TRUE)
 
+# Lines: population-level predictions from m_corr (common UBF slope, time offset),
+# drawn over the observed UBF range of each time point
 p_scatter <- rna_ubf |>
   ggplot(aes(ystd, rna_mg, fill = time)) +
-  geom_smooth(aes(group = time), method = "lm", se = FALSE, color = "black", linewidth = 0.8) +
+  geom_line(data = corr_lines, aes(ystd, rna_mg, group = time),
+            color = "black", linewidth = 0.8, inherit.aes = FALSE) +
   geom_point(shape = 24, size = 2.5, color = "black", alpha = 0.9) +
   scale_fill_manual(values = c(pre = "white", w3 = "grey45"),
                     labels = c(pre = "Pre", w3 = "Week 3"), name = NULL) +
