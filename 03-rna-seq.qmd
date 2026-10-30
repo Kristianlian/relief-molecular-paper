@@ -21,11 +21,11 @@ All contrasts updated to properly aggregate over sex (previously implicitly fixe
 - Marked transcriptional differences between age groups at baseline.
   - Young higher: aerobic energy metabolism — oxidative phosphorylation, mitochondrial gene expression.
   - Old higher: immune activation (humoral immune response, complement activation) and epigenetic/RNA regulation (heterochromatin formation, alternative mRNA splicing).
-- Two originally-cited categories (foam cell differentiation, DNA replication) didn't survive the corrected data — input needed on replacements.
+- Two originally-cited categories (foam cell differentiation, DNA replication) didn't survive the corrected data. Replaced in the write-up (see Results) with complement activation and heterochromatin formation — flagged for Daniel's review.
 
 #### Training effect (baseline → t3), both age groups
 
-Large, broad response in both young (3,503 genes) and old (4,241 genes) at FDR<5% — training clearly changes gene expression substantially. Unchanged after sex-aggregation. Remarkably similar biology between age groups — 6 of top 10 GO terms shared by exact ID (RNA splicing, ribonucleoprotein complex biogenesis, integrin-mediated signaling pathway, cell adhesion mediated by integrin, collagen metabolic process, mRNA transport), same direction/magnitude — consistent with the age×time interaction being essentially null. Both groups' #1 hit is also a collagen/ECM-organization term (young: extracellular matrix organization; old: collagen fibril organization) — closely related, functionally overlapping, though not an exact ID match.
+Large, broad response in both young (3,503 genes) and old (4,241 genes) at FDR<5% — training clearly changes gene expression substantially. Unchanged after sex-aggregation. Remarkably similar biology between age groups — 6 of top 10 GO terms shared by exact ID (RNA splicing, ribonucleoprotein complex biogenesis, integrin-mediated signaling pathway, cell adhesion mediated by integrin, collagen metabolic process, mRNA transport), same direction/magnitude — consistent with the age×time interaction being essentially null at the gene level. Both groups' #1 hit is also a collagen/ECM-organization term (young: extracellular matrix organization; old: collagen fibril organization) — closely related, functionally overlapping, though not an exact ID match.
 
 Pattern:
 - Training up-regulates ECM/connective tissue remodeling (collagen metabolic process, integrin signaling/adhesion, ECM/collagen fibril organization)
@@ -36,11 +36,13 @@ Non-shared categories:
 - Old-only: regulation of coagulation, cellular extravasation, regulation of blood coagulation. 
 Young leans collagen/migration/angiogenesis, old leans coagulation/vascular — secondary difference, not contradictory to the main story.
 
+Age × time interaction (young_old_t3): only 1 gene at FDR<5%, but GSEA on the same contrast shows a real, modest pathway-level signal (RNA splicing/mRNA processing shifts more in young; angiogenesis and aerobic respiration shift more in young). Diffuse, coordinated shift rather than individual standout genes.
+
 #### Volume effect (Mod vs. Low), old adults only
 
 - Young: essentially null (young_volume_t3, 1 gene) — no comparable volume effect.
 - Old: weak but real signal (1,216 genes at FDR<5%) — moderate vs. low volume produces a detectable transcriptional difference.  
-- Together, an age-dependent volume effect. Unchanged after sex-aggregation.
+- The formal young-vs-old comparison of the volume effect (young_old_volume_t3) is null (0 genes), so "detectable in old but not in young" is the safe wording, not "present in old and absent in young". Unchanged after sex-aggregation.
 
 Higher volume in old yielded more mitochondrial/oxidative signal (inner mitochondrial membrane organization, respiratory electron transport chain, purine-containing compound biosynthesis) but less muscle-contractile/translational signal (skeletal muscle contraction, cytoplasmic translation, muscle organ development, striated muscle cell differentiation, ribosomal small subunit biogenesis).
 old_volume_t3's p.adjust values markedly weaker than the training-effect contrasts — real but modest signal (1,216 genes vs. 3,500–4,200 for the main training effects).
@@ -49,13 +51,15 @@ old_volume_t3's p.adjust values markedly weaker than the training-effect contras
 
 - Gene-sets to non-annotated genes that were different between young and old at baseline - Are these also related to inflammation and oxidative phosphorylation?
 
+- Final clustering/correlation section (non-annotated gene GO annotation) completed but not yet interpreted or written up.
+
 - Cell type contributions - Is the large differences between young and old at baseline related to differences in cell type proportions? [SCDC](https://meichendong.github.io/SCDC/) could be used for deconvloution. 
 
 - Splicing factors and pathways to bridge to intron retention
 
-- No figures/write-up for the training or volume-effect results yet (only the baseline age comparison has a finished figure).
 
-- Final clustering/correlation section (non-annotated gene GO annotation) completed but not yet interpreted or written up.
+
+
 
 
 
@@ -228,10 +232,10 @@ We are constructing a model that will capture:
 
 - Effects of the training intervention averaged over age and volume conditions (descriptive)
 - Average effects of the training intervention within age groups, averaged over volume conditions (descriptive)
-- Differences between age group in change from baseline to time 2 and 3, averaged over volume conditions (inferential)
-- Differences between volume conditions at times 2 and 3, averaged over age groups (inferential) 
-- Differences between volume conditions at times 2 and 3 within age groups (descriptive)
-- Differences between volume conditions between age groups at times 2 and 3 (inferential)
+- Differences between age groups in change from baseline to time 3, averaged over volume conditions (inferential)
+- Differences between volume conditions at time 3, averaged over age groups (inferential) 
+- Differences between volume conditions at time 3 within age groups (descriptive)
+- Differences between volume conditions between age groups at time 3 (inferential)
 
 We separate descriptive from inferential contrasts here to avoid making claims about, e.g., age-group differences based on informal comparisons of within-group effects without a formal contrast. The within-group contrasts can still be used for description. Sex is added as a control variable to balance any sex differences between groups and time points.
 
@@ -241,11 +245,24 @@ $$
 \begin{align}
 y_{i[g]} &\sim \operatorname{NB2}(\mu_{i[g]}, \phi_{[g]}) \\
 \log(\mu_{i[g]} ) &= \beta_{k[g]}X_i  + \log(S_i) + b_{0i[g]} \\
+\beta_{k[g]}X_i &= \beta_{0[g]} + \beta_{1[g]}\text{Sex}_i + \beta_{2[g]}\text{A}_i + \beta_{3[g]}\text{TX1}_i + \beta_{4[g]}\text{TX2}_i + \beta_{5[g]}(\text{A}_i \times \text{TX1}_i) + \beta_{6[g]}(\text{A}_i \times \text{TX2}_i)\\ 
+b_{0i[g]} &\sim \operatorname{Normal}(0, \sigma_{b[g]}) \\
+\end{align}
+$$
+where the gene expression levels for gene *g*, and row *i* in the meta data ($y_{i[g]}$), is distributed according to a negative binomial distribution with mean $\mu_{i[g]}$ and dispersion $\phi_{[g]}$. The linear predictor for $\mu_{i[g]}$ has a set of fixed effects $\beta_{k[g]}X_i$, an offset term $\log(S_i)$ describing the TMM normalized library size as a fraction of the median library size, and a participant-level varying intercept ($b_{0i[g]}$). The fixed effects contain parameters describing the intercept ($\beta_{0[g]}$) representing the expression level in male participants in the old age-group at baseline (`time == "t1"`), the difference between sexes ($\beta_{1[g]}\text{Sex}_i$, female vs. male), the difference between age groups (*A*, young vs. old) at baseline ($\beta_{2[g]}\text{A}_i$), the time-condition effects in the reference level age group (old), $\beta_{3[g]}\text{TX1}_i$ and $\beta_{4[g]}\text{TX2}_i$, and the interactions between age and the time-condition effects, $\beta_{5[g]}(\text{A}_i \times \text{TX1}_i)$ and $\beta_{6[g]}(\text{A}_i \times \text{TX2}_i)$. The time-condition factor (`tx`) has three levels: baseline (all participants at `t1`, the reference), time 3 after low-volume training (TX1, `t3low`) and time 3 after moderate-volume training (TX2, `t3mod`). It thus combines time-point and volume condition (low vs. moderate volume). In the fitted model objects these parameters are named `(Intercept)`, `sexfemale`, `ageyoung`, `txt3low`, `txt3mod`, `ageyoung:txt3low` and `ageyoung:txt3mod`, in addition to the participant standard deviation (`sd__(Intercept)`).
+
+<!-- Previous version (original 5-level tx, TX1-TX4), kept for reference. It predates the sample-mapping fix (only t1 and t3 in the study); its parameter indices were also inconsistent with the text (Sex and A both labelled beta 1).
+$$
+\begin{align}
+y_{i[g]} &\sim \operatorname{NB2}(\mu_{i[g]}, \phi_{[g]}) \\
+\log(\mu_{i[g]} ) &= \beta_{k[g]}X_i  + \log(S_i) + b_{0i[g]} \\
 \beta_{k[g]}X_i &= \beta_{0[g]} + \beta_{1[g]}\text{Sex}_i + \beta_{2[g]}\text{A}_i + \beta_{3[g]}\text{TX1}_i + \beta_{4[g]}\text{TX2}_i + \beta_{5[g]}\text{TX3}_i + \beta_{6[g]}\text{TX4}_i + \beta_{7[g]}(\text{A}_i \times \text{TX1}_i) + \beta_{8[g]}(\text{A}_i \times \text{TX2}_i) + \beta_{9[g]}(\text{A}_i \times \text{TX3}_i)+ \beta_{10[g]}(\text{A}_i \times \text{TX4}_i)\\ 
 b_{0i[g]} &\sim \operatorname{Normal}(0, \sigma_{b[g]}) \\
 \end{align}
 $$
 where the gene expression levels for gene *g*, and row *i* in the meta data ($y_{i[g]}$), is distributed according to a negative binomial distribution with mean $\mu_{i[g]}$ and dispersion $\phi_{[g]}$. The linear predictor for $\mu_{i[g]}$ has a set of fixed effects $\beta_{k[g]}X_i$, an offset term $\log(S_i)$ describing the TMM normalized library size as a fraction of the median library size, and a participant-level varying intercept ($b_{0i[g]}$). The fixed effects contain parameters describing the intercept ($\beta_{0[g]}$) representing the expression level in the old age-group at baseline (`time == "t1"`), the differences between age groups (*A*) at baseline ($\beta_{1[g]}\text{A}_i$), time-condition-effects in the reference level age group (e.g., $\beta_{3[g]}\text{TX1}_i$) and the interaction between age and time-condition-effects (e.g., $\beta_{6[g]}(\text{A}_i \times \text{TX1}_i)$). The time-condition effect captures combination of time-points and volume (Low vs. Moderate volume). $\beta_{1[g]}\text{Sex}_i$ represent the sex variable with corresponding its parameter.
+
+-->
 
 We will use `glmmTMB` to fit the model using the `nbinom2` family function. The dispersion ($\phi$) parameter will be part of describing the variance in the model as $\operatorname{Var}(y_i) = \mu_i + \frac{\mu^2_i}{\phi}$. A large $\phi$ indicate that overdispersion in relation to a Poisson dispersion is small, as $\phi$ decrease, over-dispersion increase[^notes-on-parameterization]. 
 
@@ -313,6 +330,8 @@ marginaleffects::predictions(m,
 
 The next step is to set up contrasts. This can be done using the hypothesis argument in `marginaleffects::predictions`. As a sanity check we add a single contrast, with a corresponding single parameter value in the model output (@tbl-model-prototype-prediction-contrast). This contrast corresponds to the parameter `ageyoung` in the model summary (@tbl-model-prototype-prediction-modelsummary).
 
+<!-- NOTE (KL): this prototype chunk uses the 6-row datagrid WITHOUT sex (b1 = old/baseline, b2 = young/baseline). The final sum_fun_contr further down uses the 12-row datagrid WITH sex, where b1-b12 map differently. Both are correct for what they do; this chunk is kept as the simple sanity check. -->
+
 ```{r}
 #| label: tbl-model-prototype-prediction-contrast
 
@@ -349,7 +368,13 @@ We are now building a full function that takes a model object as its input and r
 ```{r}
 #| label: tbl-model-testsumfun
 
-## Attempting to include sex in the contrasts
+## Contrasts averaged over sex: sex is included in the datagrid (12 rows:
+## 3 tx x 2 age x 2 sex) and every hypothesis averages over both sex levels.
+## Row order (verified): b1 old/male/baseline, b2 old/female/baseline,
+## b3 young/male/baseline, b4 young/female/baseline, b5 old/male/t3low,
+## b6 old/female/t3low, b7 young/male/t3low, b8 young/female/t3low,
+## b9 old/male/t3mod, b10 old/female/t3mod, b11 young/male/t3mod,
+## b12 young/female/t3mod.
 
 sum_fun_contr <- function(m) {
   
@@ -406,7 +431,7 @@ sum_fun_contr <- function(m) {
   return(out)
 }
 
-## OLD sum_fun
+## OLD sum_fun (kept for reference: sex fixed at the modal level, 6-row datagrid)
 #sum_fun_contr <- function(m) {
 #  
 #  # Disable the warning message
@@ -612,42 +637,22 @@ if(refit | !file.exists("data-out/m1-rnaseq.RDS") ) {
   
 }
 
-# Error check after including "sex" in the contrasts/hypotheses
+m1r <- readRDS("data-out/m1-rnaseq.RDS")
+
+# Error/warning check of the full m1 run (new seqwrap: @errors is a tidy long
+# table with columns target, stage, type, class, message):
 #m1r@errors |> 
 #  dplyr::glimpse()
-
+#
 #m1r@errors |> 
 #  dplyr::filter(target == "ENSG00000286235.1_ENSG00000286235") |> 
 #  dplyr::pull(message)
-
-# one gene (ENSG00000286235.1) has sparse/structurally deficient data that the native m1 model can't fully resolve - expected to be stabilized by m2's informative priors
-
-
-m1r <- readRDS("data-out/m1-rnaseq.RDS")
-
-# "Some targets had associated errors or warnings"
-# - one summery function warning indicated
-
-#m1s <- seqwrap_summarise(m1r)
-# check seqwrap's warning log — the exact accessor may vary, 
-# but typically something like:
-#m1r@warnings  
-# or check the seqwrap object structure directly:
-#str(m1r, max.level = 1)
-
-#m1r@errors |> 
-#  dplyr::glimpse()
-
-#m1r@errors |> 
-#  dplyr::filter(!purrr::map_lgl(warn_sum, is.null))
-
-#w <- m1r@errors |> 
-#  dplyr::filter(!purrr::map_lgl(warn_sum, is.null)) |> 
-#  dplyr::pull(warn_sum) |> 
-#  purrr::pluck(1)
-
-#conditionMessage(w)
-# "Model matrix is rank deficient. Some variance-covariance parameters are\n  missing."
+#
+# One gene (ENSG00000286235.1) has sparse/structurally deficient data that the
+# naive m1 model can't fully resolve ("Model matrix is rank deficient. Some
+# variance-covariance parameters are missing." + "The jacobian does not match
+# the variance-covariance matrix."). Resolved by m2's informative priors
+# (16,878/16,878 targets have summaries under m2).
 
 ```
 
@@ -700,12 +705,14 @@ trend_model <- loess(dispersion ~ log_mu_raw,
 # 50, 95 and 99% quantile intervals around the predicted mean to visualize the 
 # implied shrinkage prior.
 
+# Original (hardcoded range; predict.loess returns NA outside the range of the
+# fitted data, which broke this step after the seqwrap update):
 #pred <- data.frame(
 #  log_mu_raw = seq(from = 1.5, to = 13.5, by = 0.1), 
 #  disp_pred = predict(trend_model, newdata = data.frame(log_mu_raw = seq(from = 1.5, to = 13.5, by = 0.1)))
 #) |>
 
-# Change after including sex contrasts
+# Changed: derive the prediction range from the data
 mu_range <- range(dispersion_data$log_mu_raw, na.rm = TRUE)
 
 pred <- data.frame(
@@ -762,7 +769,7 @@ dispersion_data |>
 ```
 
 
-Similarly, for all fixed effects parameters, except the intercept, we use the mean and standard deviation of the preliminary estimates to create priors. For the varying intercepts (`sd__(Intercept)`) we will use a gamma distribution to weekly regularize this parameter. The intercept parameter will be left without a prior as it is on different scales depending on the gene target. 
+Similarly, for all fixed effects parameters, except the intercept, we use the mean and standard deviation of the preliminary estimates to create priors. For the varying intercepts (`sd__(Intercept)`) we will use a gamma distribution to weakly regularize this parameter. The intercept parameter will be left without a prior as it is on different scales depending on the gene target. 
 
 The code below first extracts the trend model predictions for the dispersion estimate then combine these on a target-by-target basis with a overall fixed-effect estimates.
 
@@ -783,6 +790,8 @@ dispersion_prior <- data.frame(
   
 
 
+# Guard: the class vector below is hard-coded to 6 fixef terms + 1 ranef term
+stopifnot(nrow(eb_estimates) == 7)
 
 fixef_priors <- eb_estimates |> 
   mutate(prior = if_else(term == "sd__(Intercept)", 
@@ -884,10 +893,10 @@ if(refit | !file.exists("data-out/m2-rnaseq.RDS") ) {
 
 m2r <- readRDS("data-out/m2-rnaseq.RDS")
 
-
-#m2s <- seqwrap_summarise(m2r, verbose = FALSE)
-#length(unique(m2s$summaries$target))  # expect 16878
-# No errors/warnings found
+# Check (run after a refit): all targets should have summaries
+#m2s_check <- seqwrap_summarise(m2r, verbose = FALSE)
+#length(unique(m2s_check$summaries$target))  # expect 16878
+# Last check: 16,878 targets, no errors/warnings.
 
 
 ```
@@ -970,6 +979,28 @@ p2 <- bind_rows(
 
 
 cowplot::plot_grid(p1, p2, ncol = 2)
+
+```
+
+
+```{r}
+#| include: false
+
+# Values reported inline in the text (one place, defined once).
+# Number of genes at FDR < 5% (BH-adjusted within each contrast term).
+
+sig_count <- function(term_name, data = m2s$summaries, fdr = 0.05) {
+  data |> 
+    dplyr::filter(term == term_name) |> 
+    dplyr::mutate(p.adj = p.adjust(p.value, method = "BH")) |> 
+    dplyr::filter(p.adj < fdr) |> 
+    nrow()
+}
+
+n_diff_expressed    <- sig_count("ageyoung")
+n_sig_young_t3      <- sig_count("young_t3")
+n_sig_old_t3        <- sig_count("old_t3")
+n_sig_old_volume_t3 <- sig_count("old_volume_t3")
 
 ```
 
@@ -1088,6 +1119,7 @@ gsea_fun <- function(sums, coef, setgenes, ontology = "BP") {
 # Function for plotting a enrichment score for specific gene sets
 #
 #
+# NB: colscale needs length(genesets) + 1 colours (1 background + 1 per set).
 gse_plot <- function(gseresults, genesets = c("GO:0042775", "GO:0000398"), 
                      colscale = c("gray80", "#DE8F05", "#009E73")) {
   
@@ -1160,7 +1192,7 @@ gse_plot <- function(gseresults, genesets = c("GO:0042775", "GO:0000398"),
 
 ```{r}
 #| label: fig-age-diff
-#| fig-cap: "Age-group differences in gene expression profiles at baseline."  
+#| fig-cap: "Age-group differences in gene expression profiles at baseline. A) Volcano plot of the age contrast (Young - Old); genes above the dashed line differ at FDR < 5%, positive estimates indicate higher expression in young. B) Running enrichment score (top) and ranked contrast statistics (bottom) for three Gene Ontology gene sets." 
 
 
 
@@ -1170,7 +1202,7 @@ gsearesults <- gsea_fun(sums = m2s$summaries,
          setgenes = bp_genes,
          ontology = "BP")
 
-# Produced 11 warnings
+# Produced 11-15 warnings (ties in the preranked stats, parallel/serialize notes)
 
 
 filtered_results <- gsearesults$gse_results_filtered |> 
@@ -1178,44 +1210,27 @@ filtered_results <- gsearesults$gse_results_filtered |>
   dplyr::select(Description, NES,enrichmentScore, p.adjust) |> 
   arrange(-abs(NES)) 
 
-# Checking results after the sample-mapping error fix, are the same same GO IDs surfacing still?
+# Checks done after the sample-mapping error fix (GSEA only needs to be run once;
+# a duplicate gsea_fun() call further down was removed):
+# - the previously hardcoded GO IDs (humoral immune response, alternative mRNA
+#   splicing) are still significant in the full result (gsearesults$gse_results)
+#   but are collapsed into parent terms by simplify() in filtered_results.
+# - foam cell differentiation and DNA replication terms are no longer present.
 #data.frame(gsearesults$gse_results) |> 
 #  dplyr::filter(ID %in% c("GO:0002455", "GO:0000381")) |> 
 #  dplyr::select(ID, Description, NES, p.adjust)
-
-# All three previous hardcoded GO IDs are still genuinely significant, and appear in the final following plot. Only Oxidative Phosphorylation seems to survive to "filtered_results" though, so maybe the cutoff is to harsh?
-
+#
 #filtered_results |> 
 #  filter(NES < 0) |> 
 #  arrange(p.adjust) |> 
 #  head(10)
-# This suggests filtered_results/simplify() collapses humoral/mRNA splicing to the parent terms
 
 flag_genes <- gsearesults$diff_genes_out |> 
   pull(symbol)
 
 
-# Count differentially expressed genes
-n_diff_expressed <- m2s$summaries |> 
-  filter(term == "ageyoung") |> 
-   # Separate for ensemble and symbol
-    separate_wider_regex(
-    target,
-    patterns = c(
-      ensembl  = "ENSG\\d+",
-      "\\.",
-      version  = "[^_]+",      
-      "_",
-      symbol   = ".+"
-    )
-  ) |> 
-
-  mutate(log2estimate = estimate / log(2), 
-         p.value = p.adjust(p.value, method = "BH")) |> 
-  filter(p.value  < 0.05) |> 
-  summarise(n = n()) |> 
-  pull(n)
-  
+# n_diff_expressed is now defined once in the "Values reported inline" chunk
+# above (the previous definition here gave the same number).
   
 
 
@@ -1264,7 +1279,7 @@ p1 <- m2s$summaries |>
   
 
 
-## Original baseline plot
+## Original baseline GSEA panel
 
 #p2 <- gse_plot(gsearesults$gse_results, 
 #         genesets = c("GO:0006119", "GO:0002455", "GO:0000381"), 
@@ -1273,28 +1288,24 @@ p1 <- m2s$summaries |>
 
 #cowplot::plot_grid(p1, p2, ncol = 2, rel_widths = c(0.7, 1)) 
 
-## Category check following sample-swapping fix
-
-gsearesults <- gsea_fun(sums = m2s$summaries, 
-                         coef = "ageyoung", 
-                         setgenes = bp_genes,
-                         ontology = "BP")
-
-data.frame(gsearesults$gse_results) |> 
-  dplyr::filter(ID %in% c("GO:0006119",  # oxidative phosphorylation
-                           "GO:0140053",  # mitochondrial gene expression
-                           "GO:0002455",  # humoral immune response
-                           "GO:0000381",  # regulation of alternative mRNA splicing
-                           "GO:0006958",  # complement activation (candidate)
-                           "GO:0031507",  # heterochromatin formation (candidate)
-                           "GO:0045814")) |>  # negative regulation of gene expression, epigenetic (candidate)
-  dplyr::select(ID, Description, NES, p.adjust) |> 
-  dplyr::arrange(p.adjust)
+## Category check following sample-mapping fix (values at the time of the check):
+## GO:0006119 oxidative phosphorylation        NES  2.79  p.adj 5.9e-19
+## GO:0140053 mitochondrial gene expression    NES  2.35  p.adj 2.5e-11
+## GO:0006958 complement activation            NES -2.27  p.adj 2.5e-04
+## GO:0002455 humoral immune response          NES -2.15  p.adj 7.1e-04
+## GO:0031507 heterochromatin formation        NES -1.87  p.adj 9.7e-04
+## GO:0045814 neg. reg. gene expr., epigenetic NES -1.77  p.adj 1.7e-03
+## GO:0000381 alt. mRNA splicing, spliceosome  NES -1.89  p.adj 6.6e-03
+#data.frame(gsearesults$gse_results) |> 
+#  dplyr::filter(ID %in% c("GO:0006119", "GO:0140053", "GO:0002455", "GO:0000381",
+#                          "GO:0006958", "GO:0031507", "GO:0045814")) |> 
+#  dplyr::select(ID, Description, NES, p.adjust) |> 
+#  dplyr::arrange(p.adjust)
 
 # CHANGED 2026-08-27 (KL) - DANIEL CHECK THIS: Two of the original 5 baseline categories (macrophage-derived foam cell differentiation, nuclear DNA replication) did not survive re-analysis after the t2/t3 sample-mapping correction (no longer present/significant in the GSEA results). Of the remaining categories, GO:0002455 (humoral immune response) is retained in spirit but replaced here with GO:0006958 (complement activation, classical pathway) - same broad immune-activation theme, more specific term, and a stronger p-value (p.adj 2.5e-4 vs 7.1e-4 for GO:0002455) under the current model. GO:0000381 (splicing) is replaced with GO:0031507 (heterochromatin formation) to better represent a potential "epigenetic/RNA regulation" framing. GO:0006119 (oxidative phosphorylation) is unchanged - strongest signal, still the clearest representative of the "young higher" energy-metabolism theme. 
 
 
-## Updated baseline plot
+## Updated baseline GSEA panel
 
 p2 <- gse_plot(gsearesults$gse_results, 
          genesets = c("GO:0006119", "GO:0006958", "GO:0031507"), 
@@ -1509,6 +1520,12 @@ plan(sequential)
   
 }
 
+# NB (KL, flag for Daniel): the existence check above looks for
+# "na-genesets-baseline.RDS" but the file is saved/read as
+# "na-genesets-baseline.RDS.RDS", so with refit <- FALSE the loop would re-run
+# every time the check file is missing. Left as is to avoid touching file names
+# of existing cached results; worth unifying the names.
+
 library(ggdendro)
 
 
@@ -1663,13 +1680,7 @@ cluster_fun <- function(genes, cor_df, go_annotation) {
 
 
 # Get top GO id from each cluster
-#results |> 
-
-
-
-
-
-
+# (unfinished scratch code from the original script - flag for Daniel)
 
 results <- readRDS("data-out/na-genesets-baseline.RDS.RDS")
 
@@ -1680,7 +1691,11 @@ results |>
   summarize(.by = target, 
             m = max(NES * -log2(p.adjust), na.rm = TRUE)) |> 
   arrange(m)
-  ggplot(aes(target, m)) + geom_point()
+
+# The ggplot() line below was not connected to the pipe above (it referenced
+# the columns `target` and `m` as if they were objects) and would error on
+# render. Commented out until it is clear what the plot was meant to show.
+#  ggplot(aes(target, m)) + geom_point()
 
 
 # 
@@ -1694,29 +1709,29 @@ results |>
 # }
  
 
-data.frame(gsearesults$gse_results) |> 
-  dplyr::filter(grepl("mitochondrial gene expression|foam cell differentiation|DNA replication", 
-                       Description, ignore.case = TRUE)) |> 
-  dplyr::select(ID, Description, NES, p.adjust) |> 
-  arrange(p.adjust)
-
-data.frame(gsearesults$gse_results) |> 
-  dplyr::filter(grepl("foam cell|DNA replication", Description, ignore.case = TRUE)) |> 
-  dplyr::select(ID, Description, NES, p.adjust) |> 
-  arrange(p.adjust)
+# One-off checks of which original baseline categories survived the
+# sample-mapping fix (result: "mitochondrial gene expression" is present and
+# significant; "foam cell" and "DNA replication" terms are absent). Kept as
+# comments for the record.
+#data.frame(gsearesults$gse_results) |> 
+#  dplyr::filter(grepl("mitochondrial gene expression|foam cell differentiation|DNA replication", 
+#                       Description, ignore.case = TRUE)) |> 
+#  dplyr::select(ID, Description, NES, p.adjust) |> 
+#  arrange(p.adjust)
+#
+#data.frame(gsearesults$gse_results) |> 
+#  dplyr::filter(grepl("foam cell|DNA replication", Description, ignore.case = TRUE)) |> 
+#  dplyr::select(ID, Description, NES, p.adjust) |> 
+#  arrange(p.adjust)
 
 
 
 ```
 
-<!-- Original write-up -->
-Comparing gene-expression profiles between age groups at baseline (Young - Old) revealed marked differences, with `r n_diff_expressed` genes showing robust differences between the groups (FDR < 5%, @fig-age-diff A). Rank-based gene-set enrichment analysis [@xu2024a] indicated that young participants had relatively higher expression of genes related to aerobic energy metabolism (e.g., oxidative phosphorylation and mitochondrial gene expression) and relatively lower expression of genes related to immune system activation (humoral immune response and macrophage-derived foam cell differentiation) and RNA processing and DNA replication (e.g., regulation of alternative mRNA splicing, via spliceosome and nuclear DNA replication; @fig-age-diff B).  
-
-<!--
-Possible update:
-Comparing gene-expression profiles between age groups at baseline (Young - Old) revealed marked differences, with `r n_diff_expressed` genes showing robust differences between the groups (FDR < 5%, @fig-age-diff A). Rank-based gene-set enrichment analysis [@xu2024a] indicated that young participants had relatively higher expression of genes related to aerobic energy metabolism (e.g., oxidative phosphorylation and mitochondrial gene expression) and relatively lower expression of genes related to immune system activation (e.g., complement activation and humoral immune response) and epigenetic regulation of gene expression (e.g., heterochromatin formation and regulation of alternative mRNA splicing, via spliceosome; @fig-age-diff B).
-
+<!-- Original write-up (superseded by the Results section below; it still cites foam cell differentiation and DNA replication, which did not survive the sample-mapping fix, so it is commented out rather than rendered)
+Comparing gene-expression profiles between age groups at baseline (Young - Old) revealed marked differences, with `r n_diff_expressed` genes showing robust differences between the groups (FDR < 5%, @fig-age-diff A). Rank-based gene-set enrichment analysis [@xu2024a] indicated that young participants had relatively higher expression of genes related to aerobic energy metabolism (e.g., oxidative phosphorylation and mitochondrial gene expression) and relatively lower expression of genes related to immune system activation (humoral immune response and macrophage-derived foam cell differentiation) and RNA processing and DNA replication (e.g., regulation of alternative mRNA splicing, via spliceosome and nuclear DNA replication; @fig-age-diff B).
 -->
+
 #### Training effects
 
 Next up we explore the training effect. First, the goal is to see which of the 7 training contrasts shows the strongest overall signal (most genes at FDR <5%, largest typical effect sizes), then we can decide where to focus the deeper GSEA work. Here we'll be running tests on age difference in training response (e.g., young_old_t3 contrast) and age difference in volume-dependent training response (young_old_volume_t3 contrast), and the main effects (young_t3, old_t3).
@@ -1747,13 +1762,13 @@ training_contrasts |>
 
 ```
 
-Both young (young_t3) and old (old_t3) show massive training effects: 3,503 and 4,241 genes at FDR <5% respectively (roughly 20-25% of the whoe filtered transcriptome), i.e., training from baseline to post (t3) produces a large, broad transcriptomal response in both age groups. Old shows slightly more genes and a somewhat smaller typical effect size (median |estimate| 0.061 vs. 0.075).
+Both young (young_t3) and old (old_t3) show massive training effects: 3,503 and 4,241 genes at FDR <5% respectively (roughly 20-25% of the whole filtered transcriptome), i.e., training from baseline to post (t3) produces a large, broad transcriptional response in both age groups. Old shows slightly more genes and a somewhat smaller typical effect size (median |estimate| 0.061 vs. 0.075).
 
-The young_old_t3 (overall training response diff by age) is essentially null, 1 gene at 5% and 0 at 1%. With the huge main effect in each group, this near null interaction suggests the magnitude/direction of the transcriptional training response is broadly similar between young and old, even though each group responds strongly on its own, they're not responding differently from each other in a significant genome-wide way. 
+The young_old_t3 (overall training response diff by age) is essentially null, 1 gene at 5% and 0 at 1%. With the huge main effect in each group, this near null interaction suggests the magnitude/direction of the transcriptional training response is broadly similar between young and old, even though each group responds strongly on its own, they're not responding differently from each other in a significant genome-wide way. (This is a difference-of-differences test with lower power than the within-group tests, so "no significant difference" is not the same as "identical".)
 
 Old_volume_t3 = 1216 genes at FDR <5%, 114 at FDR <1%. This tells us that within the old group, moderate vs. low volume produces a real, detectable difference in gene expression at post - meaningful on its own. For the young, this same effect (young_volume_t3) is essentially null (1 gene), which probably explains why the overall volume effect (averaged over age, mod_low_t3) is weak, with 143 genes at 5% and 5 at 1%. The young_old_volume_t3 is completely null (0 genes at both thresholds).
 
-So put together, this shows that training produces a robust transcriptional response in both age groups, but volume only matters for the old group. 
+So put together, this shows that training produces a robust transcriptional response in both age groups, but a volume effect is detectable only in the old group (the formal young vs. old comparison of the volume effect is null, so this is "detectable in old, not in young" rather than a demonstrated difference). 
 
 Since young_t3/old_t3 are the strongest and broadest signals, its the natural starting point for GSEA asking "what biological processes change with training in each age group". The old_volume_t3 is also quite interesting, asking "what's different about moderate vs. low volume specifically in the old". 
 
@@ -1817,6 +1832,7 @@ old_volume_top <- data.frame(gsearesults_old_volume_t3$gse_results_filtered) |>
 old_volume_top
 
 
+# Age x time interaction: no individual gene stands out, but GSEA is not empty
 data.frame(gsearesults_young_old_t3$gse_results) |> 
   dplyr::select(ID, Description, NES, p.adjust) |> 
   dplyr::arrange(p.adjust) |> 
@@ -1829,35 +1845,13 @@ m2s$summaries |>
                     p95 = quantile(neglog2p, 0.95, na.rm = TRUE),
                     p99 = quantile(neglog2p, 0.99, na.rm = TRUE))
 
-# For inline reporting
+# The inline-reporting values (n_diff_expressed, n_sig_young_t3, n_sig_old_t3,
+# n_sig_old_volume_t3) are now defined once in the "Values reported inline"
+# chunk earlier in the document.
 
+# For figures (cached so a figure script does not need to re-run GSEA)
 
-n_diff_expressed <- m2s$summaries |> 
-  dplyr::filter(term == "ageyoung") |> 
-  dplyr::mutate(p.adj = p.adjust(p.value, method = "BH")) |> 
-  dplyr::filter(p.adj < 0.05) |> 
-  nrow()
-
-
-n_sig_young_t3 <- m2s$summaries |> 
-  dplyr::filter(term == "young_t3") |> 
-  dplyr::mutate(p.adj = p.adjust(p.value, method = "BH")) |> 
-  dplyr::filter(p.adj < 0.05) |> 
-  nrow()
-
-n_sig_old_t3 <- m2s$summaries |> 
-  dplyr::filter(term == "old_t3") |> 
-  dplyr::mutate(p.adj = p.adjust(p.value, method = "BH")) |> 
-  dplyr::filter(p.adj < 0.05) |> 
-  nrow()
-
-n_sig_old_volume_t3 <- m2s$summaries |> 
-  dplyr::filter(term == "old_volume_t3") |> 
-  dplyr::mutate(p.adj = p.adjust(p.value, method = "BH")) |> 
-  dplyr::filter(p.adj < 0.05) |> 
-  nrow()
-
-# For figures
+dir.create("data-out", showWarnings = FALSE)
 
 saveRDS(gsearesults, "data-out/gsea-ageyoung.RDS")
 saveRDS(gsearesults_old_t3, "data-out/gsea-old-t3.RDS")
@@ -1903,6 +1897,14 @@ purrr::map_dfr(thresholds, function(t) {
 })
 
 # 40 seems like a sweet spot = 8 genes for young and 18 for old. This asymmetry is a genuine reflection of the larger gene-count in old (4241 vs. 3503). 
+
+```
+
+These volcano plots actually corroborate the GSEA results quite well. Almost every labelled gene in both panels is a collagen/ECM/basement-membrane gene (COL4A1, COL4A2, LAMB1, LAMA4, COL5A2, COL3A1, COL1A2, COL6A3, NID2, SPARC, PXDN), fitting the "training up-regulates ECM/connective tissue remodelling" pattern from the GSEA top-10 tables. Notably, the plot for old individuals shows a slightly more varied set beyond pure ECM, but this is still consistent with the old_t3's secondary coagulation/vascular theme - PECAM1 is a classic vascular/platelet endothelial marker, fitting the "regulation of coagulation"/"cellular extravasation" GO hits found only in old.
+
+```{r}
+#| label: fig-training-volcano
+#| fig-cap: "Training effect (baseline to t3) in young and old participants. Volcano plots of the age-specific training contrasts (young_t3, old_t3); genes above the dashed line change at FDR < 5%, positive estimates indicate higher expression at t3. Genes with -log2(FDR) > 40 are labelled."
 
 # Volcano Plots
 
@@ -1970,25 +1972,21 @@ p1_old <- m2s$summaries |>
 # Side-by-side
 cowplot::plot_grid(p1_young, p1_old, ncol = 2)
 
-# Stacked
-cowplot::plot_grid(p1_young, p1_old, ncol = 1)
+# Stacked alternative (more room for the labels in the old panel):
+#cowplot::plot_grid(p1_young, p1_old, ncol = 1)
 
 
 ```
 
 
-These volcano plots actually corroborate the GSEA results quite well. Almost every labelled gene in both panels is a collagen/ECM/basement-membrane gene (COL4A1, COL4A2, LAMB1, LAMA4, COL5A2, COL3A1, COL1A2, COL6A3, NID2, SPARC, PXDN), fitting the "training up-regulates ECM/connective tissue remodelling" pattern from the GSEA top-10 tables. Notably, the plot for old invidivuals shows a slightly more varied set beyond pure ECM, but this is still consistent with the old_t3's secondary coagulation/vascular theme - PECAM1 is a classic vascular/platelet endothelial marker, fitting the "regulation of coagulation"/"cellular extravasation" GO hits found only in old.
-
 Making a GSEA panel in addition: one representative GSEA panel using old_t3 with "shared between groups" point carried in text, rather than a dual-line overlay. <!-- Keeps the fig clean and consistent with the baseline fig structure -->
 
 ```{r}
+#| label: fig-training-gsea
+#| fig-cap: "Gene-set enrichment of the training effect (baseline to t3) in old participants. Running enrichment score (top) and ranked contrast statistics (bottom) for three Gene Ontology gene sets that were also enriched, with the same direction, in young participants."
 
-# GSAE plot
-
-gsearesults_old_t3 <- gsea_fun(sums = m2s$summaries, 
-                                coef = "old_t3", 
-                                setgenes = bp_genes,
-                                ontology = "BP")
+# GSEA plot (uses gsearesults_old_t3 computed above; the duplicate gsea_fun()
+# call that was here was removed)
 
 p2_training <- gse_plot(gsearesults_old_t3$gse_results, 
          genesets = c("GO:0008380", "GO:0007229", "GO:0022613"), 
@@ -1999,29 +1997,321 @@ p2_training <- gse_plot(gsearesults_old_t3$gse_results,
 p2_training
 
 
-# Volcano + gsea
+# Combined layout (volcanoes on top, GSEA below) - nested cowplot grids squash
+# the GSEA sub-panels and legend, so the two are kept as separate figures.
+#cowplot::plot_grid(
+#  cowplot::plot_grid(p1_young, p1_old, ncol = 2),
+#  p2_training,
+#  ncol = 1,
+#  rel_heights = c(0.8, 1.6)
+#)
 
-cowplot::plot_grid(
-  cowplot::plot_grid(p1_young, p1_old, ncol = 2),
-  p2_training,
-  ncol = 1,
-  rel_heights = c(0.8, 1.6)
-)
+```
 
-# Might be worth to consider just having them as two separate
+An alternative framing for Daniel to consider: show the age difference in training response (young_old_t3) directly, in the same style as the baseline figure. No individual gene stands out (one gene at FDR < 5%, max -log2(FDR) about 5.2), but GSEA of the same contrast is not empty: RNA splicing / mRNA processing / ribonucleoprotein complex biogenesis shift more in young (negative NES), while angiogenesis and aerobic/cellular respiration shift in the opposite direction (positive NES). The direction of the training effect itself for the respiration terms should be checked in young_t3/old_t3 before wording this as "increases more in young".
+
+```{r}
+#| label: fig-training-interaction
+#| fig-cap: "Age difference in the training response (young_old_t3). A) Volcano plot of the age x time contrast; only one gene is above the dashed FDR 5% line. B) Running enrichment score (top) and ranked contrast statistics (bottom) for three Gene Ontology gene sets: coordinated shifts at the pathway level despite no individual standout genes."
+
+p1_interaction <- m2s$summaries |> 
+  filter(term == "young_old_t3") |> 
+  mutate(log2estimate = estimate / log(2), 
+         p.value = p.adjust(p.value, method = "BH")) |> 
+  ggplot(aes(log2estimate, -log2(p.value))) + 
+  geom_hline(yintercept = -log2(0.05), lty = 2, color = "gray") +
+  annotate("text", x = -0.45, y = 5.8, 
+           label = "FDR 5%", size = 3, hjust = 0, color = "gray") +
+  geom_point(alpha = 0.3, color = "#0173B2") + 
+  theme_classic() + 
+  labs(x = "Estimate (log<sub>2</sub>, Young - Old training response)", 
+       y = "log<sub>2</sub>(FDR)") + 
+  theme(axis.title.x = ggtext::element_markdown(),
+        axis.title.y = ggtext::element_markdown()) + 
+  scale_y_continuous(limits = c(0, 6), expand = c(0,0))
+
+p2_interaction <- gse_plot(gsearesults_young_old_t3$gse_results, 
+         genesets = c("GO:0008380", "GO:0001525", "GO:0009060"), 
+         colscale = c("gray80", "#DE8F05", "#009E73", "#0173B2"))
+
+cowplot::plot_grid(p1_interaction, p2_interaction, ncol = 2, rel_widths = c(0.7, 1))
 
 ```
 
 #### Results
 
-Comparing gene-expression profiles between age groups at baseline (Young - Old) revealed marked differences, with `r n_diff_expressed` genes showing robust differences between the groups (FDR < 5%, fig ..). Rank-based gene-set enrichment analysis [@xu2024a] indicated that young participants had relatively higher expression of genes related to aerobic energy metabolism (e.g., oxidative phosphorylation and mitochondrial gene expression) and relatively lower expression of genes related to immune system activation (e.g., complement activation and humoral immune response) and epigenetic regulation of gene expression (e.g., heterochromatin formation and regulation of alternative mRNA splicing, via spliceosome; fig ..)
+Comparing gene-expression profiles between age groups at baseline (Young - Old) revealed marked differences, with `r n_diff_expressed` genes showing robust differences between the groups (FDR < 5%, @fig-age-diff A). Rank-based gene-set enrichment analysis [@xu2024a] indicated that young participants had relatively higher expression of genes related to aerobic energy metabolism (e.g., oxidative phosphorylation and mitochondrial gene expression) and relatively lower expression of genes related to immune system activation (e.g., complement activation and humoral immune response) and epigenetic regulation of gene expression (e.g., heterochromatin formation and regulation of alternative mRNA splicing, via spliceosome; @fig-age-diff B)
 
-Training induced a large, broad transcriptional response in both age groups: `r n_sig_young_t3` genes changed from baseline to t3 in young participants, and `r n_sig_old_t3` in old participants (FDR < 5%, fig ..). Individual genes with the strongest training-induced changes were predominantly collagen and basement-membrane genes in both groups (e.g., COL4A1, COL4A2, LAMB1, PXDN in young; COL4A1, LAMA4, COL3A1, COL1A2, SPARC in old; fig ..), consistent with an extracellular matrix (ECM) remodeling response to resistance training.
+Training induced a large, broad transcriptional response in both age groups: `r n_sig_young_t3` genes changed from baseline to t3 in young participants, and `r n_sig_old_t3` in old participants (FDR < 5%, @fig-training-volcano). Individual genes with the strongest training-induced changes were predominantly collagen and basement-membrane genes in both groups (e.g., COL4A1, COL4A2, LAMB1, PXDN in young; COL4A1, LAMA4, COL3A1, COL1A2, SPARC in old; @fig-training-volcano), consistent with an extracellular matrix (ECM) remodeling response to resistance training.
 
-Rank-based gene-set enrichment analysis [@xu2024a] showed that the dominant biology of the training response was remarkably similar between age groups: 6 of the top 10 enriched categories were shared, with matching direction and comparable magnitude in both young and old (RNA splicing, ribonucleoprotein complex biogenesis, integrin-mediated signaling pathway, cell adhesion mediated by integrin, collagen metabolic process, and mRNA transport; fig ..). Training up-regulated genes related to ECM/connective tissue remodeling (e.g., integrin-mediated signaling and adhesion, collagen metabolic process) and down-regulated genes related to RNA-processing and ribosome biogenesis (e.g., RNA splicing, ribonucleoprotein complex biogenesis, mRNA transport) in both groups. <!--This similarity in the transcriptional training response was consistent with the age × time interaction contrast showing essentially no significant genes, indicating that the near-null interaction reflects genuinely similar biology between age groups rather than a lack of statistical power.--> A smaller set of categories differed by age: young participants showed additional enrichment for cytoplasmic translation, mesenchymal cell migration, and angiogenesis, while old participants showed additional enrichment for coagulation- and vascular-related categories. <!--(regulation of coagulation, cellular extravasation, regulation of blood coagulation) — reflected in old participants' volcano plot by genes such as PECAM1, a canonical vascular/platelet-endothelial marker (@fig-training-volcano).-->
+Rank-based gene-set enrichment analysis [@xu2024a] showed that the dominant biology of the training response was remarkably similar between age groups: 6 of the top 10 enriched categories were shared, with matching direction and comparable magnitude in both young and old (RNA splicing, ribonucleoprotein complex biogenesis, integrin-mediated signaling pathway, cell adhesion mediated by integrin, collagen metabolic process, and mRNA transport; @fig-training-gsea). Training up-regulated genes related to ECM/connective tissue remodeling (e.g., integrin-mediated signaling and adhesion, collagen metabolic process) and down-regulated genes related to RNA-processing and ribosome biogenesis (e.g., RNA splicing, ribonucleoprotein complex biogenesis, mRNA transport) in both groups. <!--This similarity in the transcriptional training response was consistent with the age × time interaction contrast showing essentially no significant genes, indicating that the near-null interaction reflects genuinely similar biology between age groups rather than a lack of statistical power.--> A smaller set of categories differed by age: young participants showed additional enrichment for cytoplasmic translation, mesenchymal cell migration, and angiogenesis, while old participants showed additional enrichment for coagulation- and vascular-related categories. <!--(regulation of coagulation, cellular extravasation, regulation of blood coagulation) — reflected in old participants' volcano plot by genes such as PECAM1, a canonical vascular/platelet-endothelial marker (@fig-training-volcano).-->
 
 In contrast to the broadly age-independent training effect, the effect of training volume (moderate vs. low) was age-dependent: a substantial number of genes differed by volume in old participants (`r n_sig_old_volume_t3` genes, FDR < 5%), while essentially no genes showed a volume effect in young participants. Among old participants, higher training volume was associated with relatively higher expression of genes related to mitochondrial biogenesis and oxidative metabolism (e.g., inner mitochondrial membrane organization, respiratory electron transport chain, purine-containing compound biosynthesis) and relatively lower expression of genes related to muscle contractile function and translation (e.g., skeletal muscle contraction, cytoplasmic translation, muscle organ development, striated muscle cell differentiation, ribosomal small subunit biogenesis). This volume effect was considerably more modest than the main training effect, both in the number of genes involved and in statistical strength. <!--(FDR values several orders of magnitude weaker than the training-effect contrasts).-->
 
+## Ribosome biogenesis
 
+Ribosome biogenesis (RiBi) is central to the thesis (UBF, c-Myc, total RNA), so we look at it specifically in the RNA-seq data. The analysis has four parts: (1) a targeted GSEA on a-priori RiBi gene sets, (2) the individual RiBi genes (Pol I machinery, processing and assembly factors, MYC), (3) a check of whether any RiBi signal is specific or just follows the general shift in myofibre transcripts (tissue composition), and (4) a record of a recentring approach that turned out to be invalid.
 
+All analyses reuse the contrast tables from the GSEA sections above (`gsearesults*`), so no models are refitted. Requires clusterProfiler, org.Hs.eg.db and GO.db (loaded earlier / called with `::`).
 
+### Targeted GSEA on RiBi gene sets
+
+The genome-wide GSEA stores only terms with adjusted p < 0.01 (`pvalueCutoff = 0.01`), so a term that is missing from those tables is not necessarily unchanged. For an a-priori set of RiBi terms we therefore rerun GSEA on the stored ranked lists with `pvalueCutoff = 1`, restricted to the RiBi terms. BH adjustment is then over these few sets only, which is defensible because they were chosen in advance, but must be stated when reporting.
+
+```{r}
+#| label: ribi-gsea
+#| code-fold: true
+#| message: false
+#| warning: false
+
+# Contrast results collected in one list. Each element is the output of
+# gsea_fun(): $gene_list (all genes with estimate, std.error, statistic,
+# BH-adjusted p.value), $diff_genes_out, $gse_results, $gse_results_filtered.
+# Contrast definitions (from sum_fun_contr):
+#   baseline_age = young - old at baseline
+#   young_t3 / old_t3 = t3 - baseline within age group (averaged over volume)
+#   old_vol_t3 = moderate - low volume at t3 within old
+#   young_vs_old = young_t3 - old_t3 (interaction)
+gsea_list <- list(
+  baseline_age = gsearesults,
+  young_t3     = gsearesults_young_t3,
+  old_t3       = gsearesults_old_t3,
+  old_vol_t3   = gsearesults_old_volume_t3,
+  young_vs_old = gsearesults_young_old_t3
+)
+
+# A-priori RiBi terms (GO biological process). Descendant terms are included
+# via the GOALL mapping below, so these are the full sets.
+ribi_go <- c(
+  "ribosome biogenesis"                  = "GO:0042254",
+  "ribosomal large subunit biogenesis"   = "GO:0042273",
+  "ribosomal small subunit biogenesis"   = "GO:0042274",
+  "rRNA processing"                      = "GO:0006364",
+  "maturation of SSU-rRNA"               = "GO:0030490",
+  "transcription by RNA polymerase I"    = "GO:0006360",
+  "ncRNA processing"                     = "GO:0034470",
+  "ribonucleoprotein complex biogenesis" = "GO:0022613",  # overlaps heavily with splicing genes
+  "rRNA metabolic process"               = "GO:0016072"
+)
+
+# TERM2GENE table: all genes annotated to each term, incl. descendant terms.
+term2gene <- AnnotationDbi::select(org.Hs.eg.db,
+                                   keys = unname(ribi_go),
+                                   keytype = "GOALL", columns = "ENSEMBL") |>
+  dplyr::distinct(GOALL, ENSEMBL) |>
+  tidyr::drop_na() |>
+  dplyr::rename(term = GOALL, gene = ENSEMBL)
+
+# GSEA on one contrast, using the same ranking statistic as gsea_fun().
+# maxGSSize is raised to 1000 (genome-wide run used 500) because the broad terms
+# are large. NOTE: this returns 8 of the 9 terms; ncRNA processing is presumably
+# dropped for exceeding maxGSSize.
+run_ribi_gsea <- function(x) {
+  gl <- setNames(x$gene_list$statistic, x$gene_list$ensembl) |>
+    sort(decreasing = TRUE)
+  GSEA(gl, TERM2GENE = term2gene,
+       minGSSize = 15, maxGSSize = 1000,
+       pvalueCutoff = 1,      # keep all terms, not only significant ones
+       eps = 0, nPermSimple = 10000, verbose = FALSE) |>
+    as.data.frame()
+}
+
+ribi_gsea <- purrr::imap_dfr(gsea_list, \(x, nm)
+    run_ribi_gsea(x) |> dplyr::mutate(contrast = nm)) |>
+  dplyr::mutate(Description = unname(
+    AnnotationDbi::mapIds(GO.db::GO.db, ID, "TERM", "GOID"))) |>
+  dplyr::select(contrast, ID, Description, setSize, NES, pvalue, p.adjust) |>
+  dplyr::arrange(contrast, p.adjust)
+
+ribi_gsea
+```
+
+### Individual RiBi genes
+
+Gene sets can hide which genes drive a signal, and the GO term "ribonucleoprotein complex biogenesis" overlaps strongly with the splicing machinery. We therefore look at a short a-priori list of genes: the Pol I machinery and upstream drivers (`UBTF`, `RRN3`, `POLR1*`, `TAF1*`, `MYC`) and processing/assembly factors (snoRNP: `FBL`, `NOP56`, `NOP58`, `DKC1`; PeBoW: `PES1`, `BOP1`, `WDR12`; UTP-A: `WDR43`; `NPM1`, `NCL`). Estimates are on the natural-log scale and converted to % change. Intervals are Wald-type from m2, unadjusted for multiplicity across genes, so they are descriptive.
+
+```{r}
+#| label: fig-ribi-genes
+#| code-fold: true
+#| fig-cap: "Percent change in expression of individual ribosome biogenesis genes (point and 95% Wald interval from m2). young_t3 and old_t3: t3 vs. baseline. old_vol_t3: moderate vs. low volume at t3 in the old group."
+
+ribi_genes <- c(
+  # Pol I machinery and upstream drivers
+  "UBTF","RRN3","POLR1A","POLR1B","POLR1E","TAF1A","TAF1B","TAF1C","TAF1D","MYC",
+  # Processing and assembly factors
+  "FBL","DKC1","NOP56","NOP58","NPM1","NCL","PES1","BOP1","WDR12","WDR43")
+
+ribi_tab <- purrr::imap_dfr(gsea_list, \(x, nm)
+  x$gene_list |>
+    dplyr::filter(symbol %in% ribi_genes) |>
+    dplyr::mutate(contrast = nm))
+
+# Any genes removed by the expression filter?
+setdiff(ribi_genes, ribi_tab$symbol)
+
+ribi_tab |>
+  dplyr::filter(contrast %in% c("young_t3", "old_t3", "old_vol_t3")) |>
+  dplyr::mutate(pct = 100 * (exp(estimate) - 1),
+                lo  = 100 * (exp(estimate - 1.96 * std.error) - 1),
+                hi  = 100 * (exp(estimate + 1.96 * std.error) - 1)) |>
+  ggplot(aes(pct, reorder(symbol, pct), colour = contrast)) +
+  geom_vline(xintercept = 0, linetype = 2) +
+  geom_pointrange(aes(xmin = lo, xmax = hi), position = position_dodge(width = 0.6)) +
+  labs(x = "% change (t3 vs. baseline; moderate vs. low for old_vol_t3)", y = NULL)
+```
+
+### Is the RiBi signal specific, or does it follow myofibre content?
+
+After training, the strongest positive GSEA terms are extracellular matrix, collagen and angiogenesis (non-myofibre transcripts), and the myofibre-specific "skeletal muscle contraction" term falls. This raises the possibility that part of the RiBi (and splicing/translation) decrease reflects a change in tissue composition of the biopsy, not RiBi regulation. Three descriptive checks:
+
+1. Transcriptome-wide median shift per contrast (is the data well centred?), compared with the median shift of myofibre genes and of ribosomal protein genes.
+2. Expression of marker genes for non-myofibre cell types (fibroblast, endothelial, immune, satellite cell).
+3. A direct comparison of the median change in the RiBi set with the median change in myofibre genes, with a bootstrap interval for the difference.
+
+```{r}
+#| label: ribi-composition
+#| code-fold: true
+
+# --- 1. Median shifts ------------------------------------------------------
+# Probe set used in the first pass (9 genes, incl. fibre-type genes, which can
+# change with training for real). A wider contractile set is used in step 3.
+probe_9 <- c("ACTA1","CKM","DES","MYH1","MYH2","MYH7","TNNT1","TNNT3","MB")
+
+purrr::imap_dfr(gsea_list, \(x, nm) {
+  g <- x$gene_list
+  tibble::tibble(
+    contrast       = nm,
+    median_all     = 100 * (exp(median(g$estimate)) - 1),
+    median_probe   = 100 * (exp(median(g$estimate[g$symbol %in% probe_9])) - 1),
+    median_RPL_RPS = 100 * (exp(median(g$estimate[grepl("^RP[LS]\\d", g$symbol)])) - 1))
+})
+
+# --- 2. Non-myofibre cell-type markers --------------------------------------
+# Result: COL1A1, PECAM1 and PTPRC rise by roughly 30-110% after training in
+# both age groups (see summary); PAX7 is higher in young at baseline.
+markers <- c(fibroblast = "COL1A1", fibroblast2 = "PDGFRA", endothelial = "PECAM1",
+             endothelial2 = "VWF", immune = "PTPRC", satellite = "PAX7")
+
+purrr::imap_dfr(gsea_list, \(x, nm)
+  x$gene_list |>
+    dplyr::filter(symbol %in% markers) |>
+    dplyr::mutate(contrast = nm, pct = 100 * (exp(estimate) - 1))) |>
+  dplyr::select(contrast, symbol, pct, p.value)
+
+# --- 3. RiBi set vs. myofibre genes, with bootstrap interval ----------------
+# RiBi = all genes annotated to GO:0042254 (ribosome biogenesis).
+ribi_ens <- unique(term2gene$gene[term2gene$term == "GO:0042254"])
+
+# Two reference sets: a broad contractile set (incl. fibre-type genes, which can
+# change with training for real) and a pan-fibre set without them.
+probe_sets <- list(
+  contractile13 = c("ACTA1","CKM","DES","MB","TNNT1","TNNT3","MYH1","MYH2","MYH7",
+                    "TTN","NEB","MYBPC1","MYBPC2"),
+  panfibre4     = c("ACTA1","CKM","DES","MB")
+)
+probe_contractile <- probe_sets$contractile13   # used in the abandoned chunk below
+
+# Bootstrap resamples genes within each set and takes the difference in
+# medians. Caveats: genes are treated as independent (they are not), so the
+# interval is too narrow; with few probe genes the median is lumpy (very much so
+# with 4), so intervals are wide and not always centred on the estimate.
+set.seed(1)
+ribi_vs_probe <- purrr::imap_dfr(probe_sets, \(probe, pname)
+  purrr::imap_dfr(gsea_list[c("young_t3", "old_t3", "old_vol_t3")], \(x, nm) {
+    g <- x$gene_list
+    r <- g$estimate[g$ensembl %in% ribi_ens]
+    p <- g$estimate[g$symbol %in% probe]
+    d <- replicate(5000, median(sample(r, replace = TRUE)) -
+                         median(sample(p, replace = TRUE)))
+    tibble::tibble(
+      probe_set = pname, contrast = nm,
+      ribi_pct  = 100 * (exp(median(r)) - 1),
+      probe_pct = 100 * (exp(median(p)) - 1),
+      diff_pct  = 100 * (exp(median(r) - median(p)) - 1),
+      lo = 100 * (exp(quantile(d, 0.025)) - 1),
+      hi = 100 * (exp(quantile(d, 0.975)) - 1))
+  }))
+
+ribi_vs_probe
+```
+
+### Abandoned approach: recentred GSEA
+
+We tried to remove the myofibre shift by subtracting the median log fold change of the probe genes from every gene and rerunning GSEA. **This is not valid and its results must not be interpreted.** Subtracting a constant does not change the ranking; GSEA responds only through the score weights, and after the shift almost all statistics are of one sign, so fgsea cannot compute p-values for several terms (terms silently dropped for `young_t3` and `old_t3`). The z-based version (`(estimate - shift) / std.error`) is biased the other way: it boosts precisely measured, highly expressed genes, which favours RiBi and ribosomal sets. The code is kept for the record only (`eval: false`). A proper fix would be a composition covariate in the model itself.
+
+```{r}
+#| label: ribi-recentred-abandoned
+#| eval: false
+
+refs <- list(
+  none        = character(0),
+  panfibre    = c("ACTA1","CKM","DES","MB"),
+  contractile = probe_contractile
+)
+
+run_rc <- function(g, ref, use_z = TRUE) {
+  shift <- if (length(ref)) median(g$estimate[g$symbol %in% ref]) else 0
+  stat  <- if (use_z) (g$estimate - shift) / g$std.error else (g$estimate - shift)
+  gl    <- setNames(stat, g$ensembl) |> sort(decreasing = TRUE)
+  GSEA(gl, TERM2GENE = term2gene, minGSSize = 15, maxGSSize = 1000,
+       pvalueCutoff = 1, eps = 0, nPermSimple = 10000, verbose = FALSE) |>
+    as.data.frame() |>
+    dplyr::mutate(shift_pct = 100 * (exp(shift) - 1), n_terms = dplyr::n())
+}
+
+# z-based (biased towards highly expressed genes) and estimate-based
+# (ranking unchanged; unbalanced list) versions:
+# sens     <- purrr::imap_dfr(refs, \(ref, rn) purrr::imap_dfr(gsea_list[c("old_t3","young_t3","old_vol_t3")],
+#               \(x, nm) run_rc(x$gene_list, ref) |> dplyr::mutate(ref = rn, contrast = nm)))
+# sens_lfc <- same call with run_rc(..., use_z = FALSE)
+```
+
+### Summary of findings: ribosome biogenesis
+
+**Targeted GSEA** (eight RiBi terms; BH over these sets only)
+
+- Baseline (young vs. old): no RiBi term is significant (best p.adjust 0.08). Terms lean positive, Pol I transcription leans the other way.
+- Training effect (t3 vs. baseline): all eight terms are negative in both age groups, e.g. ribosome biogenesis NES −2.59 (old) and −2.66 (young), p.adjust about 1e-23 and 1e-28. The weakest terms (large-subunit biogenesis, Pol I transcription) are still significant (p.adjust ≤ 1e-3).
+- Moderate vs. low volume in old: also negative (ribosome biogenesis NES −1.64, p.adjust 2e-5).
+- Age interaction (young change minus old change): negative, i.e. the decrease is larger in young (ribosome biogenesis NES −1.85, p.adjust 2e-8; Pol I transcription not significant, p.adjust 0.063).
+- The eight terms are nested and overlap heavily, so they are one signal, not eight findings. "Ribonucleoprotein complex biogenesis" also overlaps with the splicing machinery, which is strongly negative in the same contrasts.
+
+**Individual genes** (@fig-ribi-genes, values read from the plot, approximate)
+
+- Pol I initiation machinery and drivers (`UBTF`, `RRN3`, `POLR1A/B/E`, `TAF1A–D`, `MYC`): small changes, mostly within ±10% with intervals spanning zero. `MYC`, `TAF1A` and `TAF1B` are, if anything, higher in the old group (about +11 to +12%, wide intervals).
+- Processing and assembly factors (`BOP1`, `FBL`, `NOP58`, `WDR43`, `NCL`, `PES1`, `DKC1`): clearer decreases of roughly 5–13% in at least one age group.
+- Moderate vs. low volume in old: wide intervals and mixed directions, so the GSEA signal reflects small coordinated shifts and not standout genes.
+
+**Is it RiBi-specific?** (descriptive checks)
+
+- The transcriptome-wide median shift is within ±0.8% in every contrast, so the data are well centred.
+- Myofibre probe genes (9-gene set) fall by about 5.5% (young t3), 9.2% (old t3) and 11.5% (moderate vs. low, old), and are 12.3% higher in young than old at baseline. Ribosomal protein genes fall by 7.0%, 4.2% and 5.9% in the same contrasts.
+- RiBi (GO:0042254) median change vs. myofibre genes, with two reference sets (13 contractile genes; 4 pan-fibre genes without fibre-type genes):
+
+| Contrast | RiBi | Myofibre (13) | Difference, 13 genes (95% interval) | Myofibre (4) | Difference, 4 genes (95% interval) |
+|---|---|---|---|---|---|
+| young_t3 | −5.8% | −5.7% | −0.1% (−1.2 to +8.2) | −5.8% | 0.0% (−7.2 to +11.5) |
+| old_t3 | −3.4% | −9.2% | +6.4% (−0.2 to +8.6) | −9.2% | +6.5% (−4.0 to +15.5) |
+| old_vol_t3 | −0.6% | −9.0% | +9.2% (+3.1 to +17.8) | −13.6% | +15.1% (+6.6 to +19.6) |
+
+- Young: RiBi falls exactly as much as the myofibre genes, so there is no evidence of a selective RiBi change. Old: RiBi falls less than the myofibre genes, but the interval touches zero. Moderate vs. low volume in old: myofibre genes fall by about 9–14% while RiBi is essentially unchanged; the interval excludes zero with both reference sets (+9% and +15%), so this does not depend on the fibre-type genes, but the size depends on which genes are used as reference. It is a hypothesis-level hint that moderate volume retains RiBi expression relative to myofibre content. This is compatible with the GSEA result for the same contrast: RiBi is slightly lower than the average gene (about 1%), but far higher than the myofibre genes.
+- Non-myofibre marker genes (% change; adjusted p-values from the contrast tables, only partly inspected):
+
+| Marker | Baseline (young vs. old) | young_t3 | old_t3 | old_vol_t3 | Interaction |
+|---|---|---|---|---|---|
+| `COL1A1` (matrix/fibroblast) | +7.7 | +111 | +96 | +14.4 | +7.9 |
+| `PECAM1` (endothelial; also leukocytes) | +5.7 | +31.1 | +29.9 | +15.2 | +0.9 |
+| `PTPRC` (immune) | −10.4 | +33.3 | +34.7 | +26.2 | −1.0 |
+| `PAX7` (satellite cell) | +23.8 | +15.2 | +19.0 | +1.9 | −3.2 |
+| `VWF` (endothelial) | +5.8 | +8.5 | +4.5 | −2.1 | +3.8 |
+| `PDGFRA` (fibro-adipogenic progenitor) | +5.8 | −2.5 | +8.4 | −3.9 | −10.1 |
+
+  After training, `COL1A1`, `PECAM1` and `PTPRC` rise by about 30–110% in both age groups, similar in size in young and old, while the myofibre genes fall by about 5–9%. Moderate vs. low volume in old adds a further rise in `PTPRC` (+26%), `PECAM1` (+15%) and `COL1A1` (+14%), in line with the further drop in myofibre genes (about −9%). At baseline only `PAX7` differs (higher in young, adjusted p = 0.021). `PDGFRA` and `VWF` barely move, so the evidence for expansion of progenitor cells and of larger-vessel endothelium is weak; `PECAM1` is also expressed on leukocytes, so it overlaps with `PTPRC`. Significance for the `old_vol_t3` column was not inspected.
+- The real median shifts are small (about 1–6%). GSEA p-values reflect consistency across hundreds of genes, not effect size, and should be reported together with magnitudes.
+
+**Interpretation and caveats**
+
+- The RiBi transcript decrease after training cannot be separated from a general decrease in myofibre-abundant transcripts, which fits a change in biopsy composition (more extracellular matrix, immune and endothelial content, and likely satellite cells; training-related remodelling is plausible biology, not a technical artefact). The marker genes support this directly, but single markers are imperfect proxies and this is not a formal deconvolution. The composition shift is similar in size in young and old. There is no support for a selective Myc-driven change in RiBi transcription.
+- The age difference in the response is the most robust remaining signal; probe genes show almost no age difference in response (+0.9%), so the composition shift does not obviously explain it, but this was not tested formally.
+- The comparison depends on the probe genes being a fair reference (fibre-type genes may change for real; a pan-fibre-only set gave the same result), treats genes as independent, and uses a 13-gene set. The recentred GSEA is invalid and is not evidence either way.
+- Not yet done: discuss a composition covariate in the model with Daniel. Biopsy timing relative to the last session and the library prep (poly-A vs. rRNA depletion) also affect how mRNA-level RiBi results should be read, and mRNA of RiBi factors is only an indirect readout compared with total RNA per mg and UBF/c-Myc protein.
