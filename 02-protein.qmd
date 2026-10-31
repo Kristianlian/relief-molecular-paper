@@ -325,9 +325,6 @@ contr_all |>
 
 Sensitivity analyses (protein). The primary analysis used log-transformed Compass-corrected area (corr.area; Run A). To assess dependence on the normalisation and on technical quality, models were refitted using uncorrected area (B), excluding capillaries with a normalisation factor < 0.5 or a Compass warning (C; for UBF also with the stricter cutoff 0.4, C2), and with a random plate intercept (D). All models used the same specification and priors as the primary analysis, and all fits showed no divergent transitions (max R̂ ≤ 1.01, min ESS = 1,588). For c-Myc (high), estimates were nearly identical across runs (all within a few percentage points), and the credible findings (a decrease in the control group and a difference between older intervention and control adults) were unchanged. For UBF, no intervention-group change or group comparison reached credibility in any run; the control-group increase had an interval including zero in the primary analysis and excluding zero in runs B, C and C2.
 
-Directive from this testing:
-The case for A is a design argument, not a result. corr.area corrects each capillary for how much total protein it contained, which is the reason to normalise at all. The earlier analysis was less supportive: the factor looked mostly like capillary-specific noise (r ≈ 0.22 across proteins) and didn’t reduce within-participant variance. That is an argument for B, since normalising a noisy factor can add noise. Run B shows it doesn’t matter much for these data. For c-Myc high, A and B agree within a few points, and for UBF they agree except for the control group’s band. So the choice between A and B is not decisive, and I’d keep A because it was your pre-specified analysis and the standard approach with this instrument. If a reviewer pushes, B is the answer, and the table shows the conclusions hold.
-
 So the primary analysis is A, with B, C/C2 and D as sensitivity.
 
 #### Primary results (Run A)

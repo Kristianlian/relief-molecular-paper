@@ -1,123 +1,109 @@
-## Study design + Exercise Figure (molecular paper)
-
-#' ---
-#' title: Figure 1 (study design and weekly training volume)
-#' format: html
-#' editor_options:
-#'   chunk_output_type: console
-#' ---
+## Study design + exercise figure (molecular paper)
+## CONSORT-style panel A; panel B = biopsy/RT schedule above weekly volume load
 
 library(here)
 library(tidyverse)
 library(cowplot)
-library(readxl)
-library(png)
-library(magick)
+library(patchwork)
 
 # ── Shared aesthetics ────────────────────────────────────────────────────────
 col_yng <- "#2166ac"
 col_old <- "#d6604d"
 col_con <- "#4d4d4d"
 
-base_theme <- theme_minimal(base_size = 8) +
+base_theme <- theme_minimal(base_size = 11) +
   theme(
     panel.grid = element_blank(),
     axis.line = element_line(colour = "black", linewidth = 0.3),
     axis.ticks = element_line(colour = "black", linewidth = 0.3),
-    strip.text = element_text(size = 7, face = "bold"),
-    plot.title = element_text(size = 8, face = "bold", hjust = 0.5),
-    axis.title = element_text(size = 7),
-    axis.text = element_text(size = 6)
+    strip.text = element_text(size = 9, face = "bold"),
+    plot.title = element_text(size = 10, face = "bold", hjust = 0.5),
+    axis.title = element_text(size = 9),
+    axis.text = element_text(size = 8),
+    legend.text = element_text(size = 8),
+    legend.title = element_text(size = 9)
   )
 
-line_size <- 0.2
-htextsize <- 2.9
-ltextsize <- 2.3
-textsize <- 2
-stextsize <- 1.7
+box_text_size <- 2.9
+label_text_size <- 3.2
+
+flow_arrow <- arrow(length = unit(0.1, "inches"), type = "closed")
 
 
-# --- LOAD IMAGES + DATA ------------------------------------------------------
-# Only the modalities relevant to the molecular paper are kept: biopsy and RT.
+# --- PANEL A: CONSORT-style flow diagram (same as the functional paper) ------
 
-biopsyimg <- readPNG(here("figures/archive/biopsy.fig.png"))
-rtimg <- readPNG(here("figures/archive/rt.fig.png"))
+add_box <- function(p, x, y, w, h, label, size = box_text_size) {
+  p +
+    geom_rect(aes(xmin = x - w/2, xmax = x + w/2, ymin = y - h/2, ymax = y + h/2),
+              fill = "white", color = "black", linewidth = 0.4, inherit.aes = FALSE) +
+    annotate("text", x = x, y = y, label = label, size = size, lineheight = 0.85)
+}
 
-d.dat <- read_excel(here("data/design.dat.xlsx"), na = "NA")
-
-
-# --- PANEL A1: Recruitment flowchart (unchanged) -----------------------------
-
-flow_arrow <- arrow(length = unit(0.09, "inches"), type = "closed")
+add_elbow <- function(p, x0, y0, x1, y1, with_arrow = TRUE) {
+  ymid <- (y0 + y1) / 2
+  p +
+    geom_segment(aes(x = x0, xend = x0, y = y0, yend = ymid), linewidth = 0.4, inherit.aes = FALSE) +
+    geom_segment(aes(x = x0, xend = x1, y = ymid, yend = ymid), linewidth = 0.4, inherit.aes = FALSE) +
+    geom_segment(aes(x = x1, xend = x1, y = ymid, yend = y1),
+                 linewidth = 0.4, inherit.aes = FALSE,
+                 arrow = if (with_arrow) flow_arrow else NULL)
+}
 
 panel_A1 <- ggplot() +
-  scale_y_continuous(limits = c(4.5, 10), expand = c(0, 0)) +
-  scale_x_continuous(limits = c(0, 19), expand = c(0, 0)) +
-  
-  annotate("text", x = 9.5, y = 9.7, label = "Recruitment", size = htextsize) +
-  
-  annotate("text", x = 1.4, y = 8.25, label = "Screening", size = ltextsize) +
-  annotate("text", x = 1.4, y = 7.75, label = "Inc./Ex. criteria", size = ltextsize) +
-  
-  # Screening -> Inclusion -> Age stratification, arrowheads mark each step
-  annotate("segment", x = 0.2, xend = 2.5, y = 7.25, yend = 7.25, arrow = flow_arrow) +
-  annotate("segment", x = 2.5, xend = 6.5, y = 7.25, yend = 7.25, arrow = flow_arrow) +
-  annotate("segment", x = 6.5, xend = 10, y = 7.25, yend = 7.25) +
-  
-  annotate("text", x = 5, y = 8.25, label = "Inclusion (n = 81)", size = ltextsize) +
-  annotate("text", x = 5, y = 7.75, label = "Informed consent", size = ltextsize) +
-  
-  annotate("text", x = 8.5, y = 8.25, label = "Age", size = ltextsize) +
-  annotate("text", x = 8.5, y = 7.75, label = "stratification", size = ltextsize) +
-  
-  # Age stratification branch -> <30 yrs
-  annotate("segment", x = 10, xend = 10, y = 7.25, yend = 8.4) +
-  annotate("segment", x = 10, xend = 11.5, y = 8.4, yend = 8.4, arrow = flow_arrow) +
-  
-  # Age stratification branch -> >70 yrs
-  annotate("segment", x = 10, xend = 10, y = 7.25, yend = 6.3) +
-  annotate("segment", x = 10, xend = 11.5, y = 6.3, yend = 6.3, arrow = flow_arrow) +
-  
-  annotate("text", x = 12.5, y = 8.4, label = "<30 yrs", size = ltextsize) +
-  annotate("text", x = 12.5, y = 6.3, label = ">70 yrs", size = ltextsize) +
-  
-  annotate("text", x = 14.75, y = 7.35, label = "Randomization", size = ltextsize) +
-  
-  # Randomization -> LV/MV group (young)
-  annotate("segment", x = 13.5, xend = 16, y = 8.4, yend = 8.4, arrow = flow_arrow) +
-  
-  # Randomization -> LV/MV/CON group (old)
-  annotate("segment", x = 13.5, xend = 16, y = 6.3, yend = 6.3, arrow = flow_arrow) +
-  
-  annotate("text", x = 16.75, y = 8.8, label = "LV", size = ltextsize) +
-  annotate("text", x = 16.75, y = 8.1, label = "MV", size = ltextsize) +
-  annotate("text", x = 17.4, y = 8.45, label = "n = 32", size = ltextsize) +
-  annotate("text", x = 16.75, y = 7, label = "LV", size = ltextsize) +
-  annotate("text", x = 16.75, y = 6.3, label = "MV", size = ltextsize) +
-  annotate("text", x = 17.4, y = 6.65, label = "n = 39", size = ltextsize) +
-  annotate("text", x = 16.75, y = 5.7, label = "CON", size = ltextsize) +
-  annotate("text", x = 17.4, y = 5.3, label = "n = 10", size = ltextsize) +
-  
+  scale_x_continuous(limits = c(0, 12), expand = c(0, 0)) +
+  scale_y_continuous(limits = c(2.6, 10), expand = c(0, 0)) +
   theme_void()
 
+# Enrollment
+panel_A1 <- add_box(panel_A1, x = 5.75, y = 9.3, w = 6.5, h = 1.1,
+                    label = "Screened & enrolled\n(n = 81)")
 
-# --- LEGEND STRIP: icon key (two icons, centred) -----------------------------
+# Enrollment -> age groups
+panel_A1 <- add_elbow(panel_A1, x0 = 5.75, y0 = 8.75, x1 = 3,   y1 = 8.05)
+panel_A1 <- add_elbow(panel_A1, x0 = 5.75, y0 = 8.75, x1 = 8.5, y1 = 8.05)
 
-panel_legend <- ggplot() +
-  scale_y_continuous(limits = c(0, 2.2), expand = c(0, 0)) +
-  scale_x_continuous(limits = c(0, 7), expand = c(0, 0)) +
-  
-  draw_image(biopsyimg, x = 2.9, y = 1.3, scale = .5, hjust = 0.5, vjust = 0.5) +
-  annotate("text", x = 2.9, y = 0.75, label = "Biopsy", size = textsize) +
-  
-  draw_image(rtimg,     x = 4.1, y = 1.3, scale = .45, hjust = 0.5, vjust = 0.5) +
-  annotate("text", x = 4.1, y = 0.75, label = "RT", size = textsize) +
-  
-  theme_void()
+# Age groups
+panel_A1 <- add_box(panel_A1, x = 3,   y = 7.5, w = 4.5, h = 1.1,
+                    label = "Younger adults\n(< 30 years, n = 32)")
+panel_A1 <- add_box(panel_A1, x = 8.5, y = 7.5, w = 4.5, h = 1.1,
+                    label = "Older adults\n(> 70 years, n = 49)")
+
+# Randomization labels
+panel_A1 <- panel_A1 +
+  annotate("text", x = 4.8, y = 5.8, label = "Randomized to training volume",
+           size = box_text_size - 0.3, fontface = "italic") +
+  annotate("text", x = 9.8, y = 6.3, label = "Randomized to training/control",
+           size = box_text_size - 0.3, fontface = "italic")
+
+# Age groups -> allocation
+panel_A1 <- add_elbow(panel_A1, x0 = 3,   y0 = 6.95, x1 = 3,    y1 = 4.75)
+panel_A1 <- add_elbow(panel_A1, x0 = 8.5, y0 = 6.95, x1 = 6.6,  y1 = 4.75)
+panel_A1 <- add_elbow(panel_A1, x0 = 8.5, y0 = 6.95, x1 = 10.4, y1 = 4.75)
+
+# Allocation boxes
+panel_A1 <- add_box(panel_A1, x = 3,    y = 4.2, w = 4.5, h = 1.3,
+                    label = "Low volume (LV) +\nModerate volume (MV)\n(n = 32)")
+panel_A1 <- add_box(panel_A1, x = 6.6,  y = 4.2, w = 4,   h = 1.3,
+                    label = "Low volume (LV) +\nModerate volume (MV)\n(n = 39)")
+panel_A1 <- add_box(panel_A1, x = 10.4, y = 4.2, w = 2.3, h = 1.3,
+                    label = "Control (CON)\n(n = 10)")
 
 
-# --- PANEL B: Training volume + assessment markers, single shared axis -------
+# --- PANEL B1: Biopsy schedule + RT session ticks, aligned to the volume plot -
 
+# Axis: week 1 = baseline, training = weeks 2-11, post = week 12.
+# The week-3 biopsy is taken after six sessions (end of training week 3 = axis week 4).
+test_order <- c("Biopsy", "RT")
+
+biopsy_points <- tibble(weeks = c(1, 4, 12),
+                        label = c("Baseline", "Week 3", "Post"),
+                        hj    = c(0.15, 0.5, 0.5),    # left-align "Baseline" so it stays inside the panel
+                        test  = factor("Biopsy", levels = test_order))
+
+guide_weeks <- c(1, 4, 12)
+week_breaks <- 1:12
+
+# RT session tick positions
 exercise <- reliefdata::relief_exercise |>
   mutate(participant = as.character(participant))
 
@@ -127,27 +113,56 @@ participants <- reliefdata::relief_participants |>
 exer.dat <- exercise |>
   full_join(participants, by = "participant")
 
-# Volume load per set -> session -> week
 exer_session <- exer.dat |>
   mutate(vl = kg * rep) |>
   summarise(.by = c(participant, session, exercise, condition, leg, age_group, allocation),
             session_vl = sum(vl, na.rm = TRUE))
 
-# Week mapping: sessions 1-10 at 2/week, sessions 11-24 at 3/week
-# (final training week has 2 sessions). After the +1 shift: baseline = week 1,
-# training = weeks 2-11, post = week 12.
+session_weeks <- exer_session |>
+  distinct(session) |>
+  mutate(week = case_when(
+    session <= 10 ~ ceiling(session / 2),
+    session > 10  ~ 5 + ceiling((session - 10) / 3)
+  )) |>
+  mutate(week = week + 1) |>
+  arrange(week, session) |>
+  mutate(.by = week,
+         session_in_week = row_number(),
+         n_in_week = n()) |>
+  mutate(x_pos = week + (session_in_week - 0.5) / n_in_week * 0.8,
+         test = factor("RT", levels = test_order))
+
+p_schedule <- ggplot() +
+  geom_vline(xintercept = guide_weeks, linetype = 2, color = "grey70", linewidth = 0.4) +
+  geom_point(data = biopsy_points, aes(x = weeks, y = test), size = 3, shape = 16) +
+  geom_text(data = biopsy_points, aes(x = weeks, y = test, label = label, hjust = hj),
+            vjust = -1.3, size = label_text_size) +
+  geom_point(data = session_weeks, aes(x = x_pos, y = test),
+             shape = 108, size = 3.5, color = "grey30") +
+  scale_y_discrete(limits = rev(test_order), expand = expansion(add = c(0.6, 0.9))) +
+  scale_x_continuous(limits = c(0.8, 12.7), breaks = week_breaks,
+                     labels = as.character(week_breaks), expand = c(0.01, 0.01)) +
+  coord_cartesian(clip = "off") +
+  labs(x = NULL, y = NULL) +
+  base_theme +
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.line.x = element_blank(),
+        plot.margin = margin(t = 5, r = 5, b = 2, l = 5))
+
+
+# --- PANEL B2: Weekly training volume load (all exercises combined) ----------
+
 exer_week <- exer_session |>
   mutate(week = case_when(
     session <= 10 ~ ceiling(session / 2),
     session > 10  ~ 5 + ceiling((session - 10) / 3)
   )) |>
   mutate(week = week + 1) |>
-  summarise(.by = c(participant, week, exercise, condition, age_group, allocation),
-            week_vl = sum(session_vl, na.rm = TRUE))
+  summarise(.by = c(participant, week, condition, age_group, allocation),
+            week_vl = sum(session_vl, na.rm = TRUE))   # all exercises; as in the functional paper
 
-# Group-level summary: mean + 95% CI per week, age x condition, leg press only
 exer_week_summary <- exer_week |>
-  filter(exercise == "LP") |>
   summarise(.by = c(week, age_group, condition),
             m = mean(week_vl, na.rm = TRUE),
             se = sd(week_vl, na.rm = TRUE) / sqrt(n()),
@@ -156,70 +171,44 @@ exer_week_summary <- exer_week |>
   mutate(age_group = factor(age_group, levels = c("yng", "old"), labels = c("Young", "Old")),
          condition = factor(condition, levels = c("low", "mod"), labels = c("Low", "Moderate")))
 
-guide_weeks <- c(1, 4, 12)   # baseline, week-3 biopsy, post
-
-label_y <- 23500   # shared top-anchor for every timepoint label
-
-panel_B <- exer_week_summary |>
-  ggplot(aes(week, m, color = age_group, linetype = condition, group = interaction(age_group, condition))) +
-  
+p_volume <- exer_week_summary |>
+  ggplot(aes(week, m, color = age_group, linetype = condition,
+             group = interaction(age_group, condition))) +
   geom_vline(xintercept = guide_weeks, linetype = 2, color = "grey70", linewidth = 0.4) +
-  
   geom_ribbon(aes(ymin = lwr, ymax = upr, fill = age_group), alpha = 0.15, color = NA) +
-  geom_line(linewidth = 0.7) +
+  geom_line(linewidth = 0.8) +
   geom_point(size = 1.8) +
-  
-  # Baseline biopsy
-  annotate("text", x = 1, y = label_y, label = "Baseline",
-           size = textsize, vjust = 1) +
-  draw_image(biopsyimg, x = 1, y = 21800, scale = 1400, hjust = 0.5, vjust = 0.5) +
-  
-  # RT start
-  annotate("text", x = 2, y = label_y, label = "RT starts",
-           size = textsize, lineheight = 0.8, vjust = 1) +
-  draw_image(rtimg, x = 2, y = 21800, scale = 1700, hjust = 0.5, vjust = 0.5) +
-  
-  # Week-3 biopsy (after six sessions)
-  annotate("text", x = 4, y = label_y, label = "Biopsy",
-           size = textsize, lineheight = 0.8, vjust = 1) +
-  draw_image(biopsyimg, x = 4, y = 21800, scale = 1400, hjust = 0.5, vjust = 0.5) +
-  
-  # Post biopsy
-  annotate("text", x = 12, y = label_y, label = "Post",
-           size = textsize, vjust = 1) +
-  draw_image(biopsyimg, x = 12, y = 21800, scale = 1400, hjust = 0.5, vjust = 0.5) +
-  
   scale_color_manual(values = c(Young = col_yng, Old = col_old), name = "Age group") +
   scale_fill_manual(values = c(Young = col_yng, Old = col_old), guide = "none") +
   scale_linetype_manual(values = c(Low = "solid", Moderate = "dashed"), name = "Volume") +
-  scale_x_continuous(limits = c(0.8, 12.7), breaks = c(1, 2, 4, 11, 12),
-                     labels = c("1", "2", "4", "11", "12"), expand = c(0.01, 0.01)) +
-  scale_y_continuous(limits = c(0, 25500)) +
-  coord_cartesian(clip = "off") +
-  labs(x = "Week", y = "Volume load (kg x reps)") +
+  scale_x_continuous(limits = c(0.8, 12.7), breaks = week_breaks,
+                     labels = as.character(week_breaks), expand = c(0.01, 0.01)) +
+  labs(x = "Week", y = "Weekly volume load (kg \u00d7 reps)") +
   base_theme +
   theme(legend.position = "bottom",
         legend.box = "horizontal",
-        legend.text = element_text(size = 6),
-        legend.title = element_text(size = 7),
-        plot.margin = margin(t = 45, r = 5, b = 5, l = 5))
+        plot.margin = margin(t = 2, r = 5, b = 5, l = 5))
 
 
-# --- COMBINE -----------------------------------------------------------------
+# --- COMBINE B: schedule (biopsies + RT ticks) / weekly volume, shared x-axis -
+
+panel_B <- p_schedule / p_volume + plot_layout(heights = c(0.9, 2.2))
+
+
+# --- COMBINE A + B -----------------------------------------------------------
 
 fig_study_design <- plot_grid(
-  plot_grid(panel_A1, labels = "A", label_size = 9),
-  panel_legend,
-  plot_grid(panel_B, labels = "B", label_size = 9),
+  plot_grid(panel_A1, labels = "A", label_size = 12),
+  plot_grid(panel_B, labels = "B", label_size = 12),
   ncol = 1,
-  rel_heights = c(1.1, 0.15, 1.3)
+  rel_heights = c(1, 1.1)
 )
 
 ggsave(
   filename = "./figures/fig-study-design.png",
   plot = fig_study_design,
   device = "png",
-  width = 174,
+  width = 180,
   height = 190,
   units = "mm",
   dpi = 300,
