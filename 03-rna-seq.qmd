@@ -113,7 +113,11 @@ dat <- readRDS("data-raw-rnaseq/relief_gene.RDS"); dat <- dat$expected_count
 nsamp <- stringr::str_to_sentence(as.english(nrow(metadata)))
 nsamp_included <- (ncol(dat) - 1)
 
-
+saveRDS(
+  list(n_selected = nrow(metadata),       # samples selected for sequencing
+       n_included = ncol(dat) - 1),       # samples passing QC (RIN > 8)
+  "data-out/rnaseq-sample-counts.RDS"
+)
 
 ```
 
